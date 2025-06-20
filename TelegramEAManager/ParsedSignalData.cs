@@ -11,12 +11,12 @@ namespace TelegramEAManager
     {
         public string Symbol { get; set; } = "";
         public string Direction { get; set; } = "";
-        public double EntryPrice { get; set; } = 0;
-        public double StopLoss { get; set; } = 0;
-        public double TakeProfit1 { get; set; } = 0;
-        public double TakeProfit2 { get; set; } = 0;
-        public double TakeProfit3 { get; set; } = 0;
         public string OriginalSymbol { get; set; } = "";
         public string FinalSymbol { get; set; } = "";
+        public double EntryPrice { get; set; }
+        public double StopLoss { get; set; }
+        public double TakeProfit1 { get; set; }
+        public double TakeProfit2 { get; set; }
+        public double TakeProfit3 { get; set; }
     }
 }

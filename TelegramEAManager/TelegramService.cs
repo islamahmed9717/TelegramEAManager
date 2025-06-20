@@ -6,19 +6,19 @@ using System.Threading.Tasks;
 using System.Windows.Forms;
 using System.IO;
 using Newtonsoft.Json;
-using TeleSharp.TL;
-using TeleSharp.TL.Messages;
-using TLSharp.Core;
+using WTelegram;
+using TL;
 
 namespace TelegramEAManager
 {
     public class TelegramService
     {
-        private TelegramClient client;
+        private Client? client;
         private int apiId;
-        private string apiHash;
-        private string verificationHash = null;
+        private string apiHash = "";
+        private string phoneNumber = "";
         private int lastMessageId = 0;
+        private User? me;
 
         public TelegramService()
         {
@@ -206,7 +206,7 @@ STEP 7: 📋 Copy the api_id (numbers) and api_hash (long string) below"
                 btnOpenWebsite.Click += (s, e) => {
                     try
                     {
-                        System.Diagnostics.Process.Start("https://my.telegram.org");
+                        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("https://my.telegram.org") { UseShellExecute = true });
                     }
                     catch
                     {
@@ -307,85 +307,205 @@ STEP 7: 📋 Copy the api_id (numbers) and api_hash (long string) below"
             }
         }
 
-        // Rest of your TelegramService methods remain the same...
-        public async Task<bool> ConnectAsync()
+        private string? Config(string what)
         {
-            if (client == null)
-                client = new TelegramClient(apiId, apiHash);
-            if (!client.IsUserAuthorized())
-                await client.ConnectAsync();
-            return client.IsUserAuthorized();
+            switch (what)
+            {
+                case "api_id": return apiId.ToString();
+                case "api_hash": return apiHash;
+                case "phone_number": return phoneNumber;
+                case "verification_code": return RequestVerificationCode();
+                case "first_name": return "islamahmed9717";
+                case "last_name": return "";
+                case "password": return RequestPassword();
+                case "session_pathname": return "session.dat";
+                default: return null;
+            }
         }
 
-        public async Task<bool> SendCodeAsync(string phoneNumber)
+        private string RequestVerificationCode()
         {
-            verificationHash = await client.SendCodeRequestAsync(phoneNumber);
-            return !string.IsNullOrEmpty(verificationHash);
+            using (var codeForm = new Form())
+            {
+                codeForm.Text = "📱 Telegram Verification Code";
+                codeForm.Size = new Size(400, 200);
+                codeForm.StartPosition = FormStartPosition.CenterScreen;
+                codeForm.FormBorderStyle = FormBorderStyle.FixedDialog;
+                codeForm.MaximizeBox = false;
+
+                var lblMessage = new Label
+                {
+                    Text = "📱 Enter the verification code sent to your Telegram:",
+                    Location = new Point(20, 20),
+                    Size = new Size(350, 40),
+                    Font = new Font("Segoe UI", 10F)
+                };
+                codeForm.Controls.Add(lblMessage);
+
+                var txtCode = new TextBox
+                {
+                    Location = new Point(20, 70),
+                    Size = new Size(200, 25),
+                    Font = new Font("Segoe UI", 12F),
+                    MaxLength = 6
+                };
+                codeForm.Controls.Add(txtCode);
+
+                var btnOK = new Button
+                {
+                    Text = "✅ Confirm",
+                    Location = new Point(240, 70),
+                    Size = new Size(100, 25),
+                    DialogResult = DialogResult.OK
+                };
+                codeForm.Controls.Add(btnOK);
+
+                codeForm.AcceptButton = btnOK;
+                txtCode.Focus();
+
+                if (codeForm.ShowDialog() == DialogResult.OK)
+                {
+                    return txtCode.Text.Trim();
+                }
+                return "";
+            }
         }
 
-        public async Task<bool> VerifyCodeAsync(string phoneNumber, string code)
+        private string RequestPassword()
         {
-            var user = await client.MakeAuthAsync(phoneNumber, verificationHash, code);
-            return client.IsUserAuthorized();
+            using (var passwordForm = new Form())
+            {
+                passwordForm.Text = "🔐 Two-Factor Authentication";
+                passwordForm.Size = new Size(400, 200);
+                passwordForm.StartPosition = FormStartPosition.CenterScreen;
+                passwordForm.FormBorderStyle = FormBorderStyle.FixedDialog;
+                passwordForm.MaximizeBox = false;
+
+                var lblMessage = new Label
+                {
+                    Text = "🔐 Enter your 2FA password:",
+                    Location = new Point(20, 20),
+                    Size = new Size(350, 40),
+                    Font = new Font("Segoe UI", 10F)
+                };
+                passwordForm.Controls.Add(lblMessage);
+
+                var txtPassword = new TextBox
+                {
+                    Location = new Point(20, 70),
+                    Size = new Size(200, 25),
+                    Font = new Font("Segoe UI", 12F),
+                    UseSystemPasswordChar = true
+                };
+                passwordForm.Controls.Add(txtPassword);
+
+                var btnOK = new Button
+                {
+                    Text = "✅ Confirm",
+                    Location = new Point(240, 70),
+                    Size = new Size(100, 25),
+                    DialogResult = DialogResult.OK
+                };
+                passwordForm.Controls.Add(btnOK);
+
+                passwordForm.AcceptButton = btnOK;
+                txtPassword.Focus();
+
+                if (passwordForm.ShowDialog() == DialogResult.OK)
+                {
+                    return txtPassword.Text;
+                }
+                return "";
+            }
+        }
+
+        public async Task<bool> ConnectAsync(string phone)
+        {
+            try
+            {
+                phoneNumber = phone;
+                client = new Client(Config);
+                me = await client.LoginUserIfNeeded();
+                return me != null;
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"❌ Connection failed: {ex.Message}", "Connection Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return false;
+            }
         }
 
         public bool IsUserAuthorized()
         {
-            return client != null && client.IsUserAuthorized();
+            return client != null && me != null;
         }
 
         public async Task<List<ChannelInfo>> GetChannelsAsync()
         {
             var channels = new List<ChannelInfo>();
-            var dialogs = await client.GetUserDialogsAsync();
-            if (dialogs is TLDialogs fullDialogs)
+
+            try
             {
-                foreach (var dialog in fullDialogs.Dialogs)
+                if (client == null) return channels;
+
+                var dialogs = await client.Messages_GetAllDialogs();
+
+                foreach (var dialog in dialogs.dialogs)
                 {
-                    if (dialog.Peer is TLPeerChannel peerChannel)
+                    if (dialogs.chats.TryGetValue(dialog.Peer.ID, out var chat) && chat is Channel channel)
                     {
-                        var channel = fullDialogs.Chats.OfType<TLChannel>()
-                            .FirstOrDefault(c => c.Id == peerChannel.ChannelId);
-                        if (channel != null)
+                        channels.Add(new ChannelInfo
                         {
-                            channels.Add(new ChannelInfo
-                            {
-                                Id = channel.Id,
-                                Title = channel.Title,
-                                Username = channel.Username ?? "",
-                                Type = channel.Megagroup ? "Supergroup" : "Channel",
-                                MembersCount = 0,
-                                AccessHash = channel.AccessHash ?? 0,
-                                LastActivity = DateTime.UtcNow
-                            });
-                        }
+                            Id = (int)channel.ID,
+                            Title = channel.Title ?? "",
+                            Username = channel.username ?? "",
+                            Type = channel.IsGroup ? "Supergroup" : "Channel",
+                            MembersCount = channel.participants_count,
+                            AccessHash = channel.access_hash,
+                            LastActivity = DateTime.UtcNow
+                        });
                     }
                 }
             }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"❌ Failed to get channels: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+
             return channels;
         }
 
         public async Task<List<string>> PollChannelMessagesAsync(int channelId, long accessHash, int limit = 10)
         {
             var result = new List<string>();
-            var inputChannel = new TLInputPeerChannel { ChannelId = channelId, AccessHash = accessHash };
-            var history = await client.GetHistoryAsync(inputChannel, limit);
 
-            if (history is TLChannelMessages channelHistory)
+            try
             {
-                foreach (var msg in channelHistory.Messages.OfType<TLMessage>().OrderBy(m => m.Id))
+                if (client == null) return result;
+
+                var inputChannel = new InputChannel(channelId, accessHash);
+                var history = await client.Messages_GetHistory(inputChannel, limit: limit);
+
+                foreach (var message in history.Messages.OfType<TL.Message>().OrderBy(m => m.ID))
                 {
-                    if (msg.Id > lastMessageId)
+                    if (message.ID > lastMessageId && !string.IsNullOrEmpty(message.message))
                     {
-                        result.Add(msg.Message);
-                        lastMessageId = msg.Id;
+                        result.Add(message.message);
+                        lastMessageId = message.ID;
                     }
                 }
             }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"❌ Failed to poll messages: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+
             return result;
         }
+
+        public void Dispose()
+        {
+            client?.Dispose();
+        }
     }
-
-
- 
 }

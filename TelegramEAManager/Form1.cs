@@ -1,4 +1,4 @@
-using Newtonsoft.Json;
+﻿using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
 using System.Drawing;
@@ -12,12 +12,12 @@ namespace TelegramEAManager
     public partial class Form1 : Form
     {
         #region Private Fields
-        private TelegramService telegramService;
-        private SignalProcessingService signalProcessor;
+        private TelegramService telegramService = null!;
+        private SignalProcessingService signalProcessor = null!;
         private List<ChannelInfo> allChannels = new List<ChannelInfo>();
         private List<ChannelInfo> selectedChannels = new List<ChannelInfo>();
         private bool isMonitoring = false;
-        private System.Windows.Forms.Timer uiUpdateTimer;
+        private System.Windows.Forms.Timer uiUpdateTimer = null!;
         private List<ProcessedSignal> allSignals = new List<ProcessedSignal>();
         #endregion
 
@@ -47,7 +47,7 @@ namespace TelegramEAManager
         private void SetupUI()
         {
             // Main Form Setup
-            this.Text = "?? Telegram EA Manager - islamahmed9717 | Real Implementation";
+            this.Text = "📊 Telegram EA Manager - islamahmed9717 | Real Implementation";
             this.Size = new Size(1400, 900);
             this.StartPosition = FormStartPosition.CenterScreen;
             this.BackColor = Color.FromArgb(245, 245, 245);
@@ -63,7 +63,7 @@ namespace TelegramEAManager
             var headerPanel = new Panel
             {
                 Dock = DockStyle.Top,
-                Height = 120,
+                Height = 85, // Reduced from 120 to 85 to give more space for channels
                 BackColor = Color.FromArgb(37, 99, 235)
             };
             this.Controls.Add(headerPanel);
@@ -71,41 +71,41 @@ namespace TelegramEAManager
             // Title
             var lblTitle = new Label
             {
-                Text = "?? REAL TELEGRAM EA MANAGER",
-                Location = new Point(20, 15),
-                Size = new Size(400, 35),
+                Text = "📊 REAL TELEGRAM EA MANAGER",
+                Location = new Point(20, 8), // Moved up slightly
+                Size = new Size(400, 30),
                 ForeColor = Color.White,
-                Font = new Font("Segoe UI", 16F, FontStyle.Bold)
+                Font = new Font("Segoe UI", 15F, FontStyle.Bold) // Slightly smaller font
             };
             headerPanel.Controls.Add(lblTitle);
 
             var lblSubtitle = new Label
             {
-                Text = $"?? Current Time (UTC): 2025-06-19 08:29:25 | User: islamahmed9717",
-                Location = new Point(20, 50),
-                Size = new Size(500, 20),
+                Text = $"🕒 Current Time (UTC): 2025-06-20 21:58:08 | User: islamahmed9717",
+                Location = new Point(20, 35), // Moved up
+                Size = new Size(500, 18),
                 ForeColor = Color.FromArgb(200, 220, 255),
-                Font = new Font("Segoe UI", 10F)
+                Font = new Font("Segoe UI", 9F) // Smaller font
             };
             headerPanel.Controls.Add(lblSubtitle);
 
-            // Phone number section
+            // Phone number section - more compact
             var lblPhone = new Label
             {
-                Text = "?? Enter Your Phone Number:",
-                Location = new Point(550, 20),
-                Size = new Size(180, 20),
+                Text = "📱 Phone:",
+                Location = new Point(550, 8),
+                Size = new Size(70, 18),
                 ForeColor = Color.White,
-                Font = new Font("Segoe UI", 10F, FontStyle.Bold)
+                Font = new Font("Segoe UI", 9F, FontStyle.Bold)
             };
             headerPanel.Controls.Add(lblPhone);
 
             var cmbPhone = new ComboBox
             {
                 Name = "cmbPhone",
-                Location = new Point(550, 45),
-                Size = new Size(200, 30),
-                Font = new Font("Segoe UI", 11F),
+                Location = new Point(620, 6),
+                Size = new Size(180, 25),
+                Font = new Font("Segoe UI", 10F),
                 DropDownStyle = ComboBoxStyle.DropDown
             };
             headerPanel.Controls.Add(cmbPhone);
@@ -113,23 +113,23 @@ namespace TelegramEAManager
             var btnConnect = new Button
             {
                 Name = "btnConnect",
-                Text = "?? CONNECT",
-                Location = new Point(760, 45),
-                Size = new Size(120, 30),
+                Text = "🔗 CONNECT",
+                Location = new Point(810, 6),
+                Size = new Size(100, 25),
                 BackColor = Color.FromArgb(34, 197, 94),
                 ForeColor = Color.White,
                 FlatStyle = FlatStyle.Flat,
-                Font = new Font("Segoe UI", 10F, FontStyle.Bold)
+                Font = new Font("Segoe UI", 9F, FontStyle.Bold)
             };
             btnConnect.Click += BtnConnect_Click;
             headerPanel.Controls.Add(btnConnect);
 
-            // MT4 Path
+            // MT4 Path - more compact
             var lblMT4 = new Label
             {
-                Text = "?? MT4/MT5 Files Path:",
-                Location = new Point(550, 80),
-                Size = new Size(130, 20),
+                Text = "📁 MT4/MT5:",
+                Location = new Point(550, 35),
+                Size = new Size(70, 18),
                 ForeColor = Color.White,
                 Font = new Font("Segoe UI", 9F)
             };
@@ -138,9 +138,9 @@ namespace TelegramEAManager
             var txtMT4Path = new TextBox
             {
                 Name = "txtMT4Path",
-                Location = new Point(680, 78),
-                Size = new Size(300, 25),
-                Font = new Font("Segoe UI", 9F),
+                Location = new Point(620, 33),
+                Size = new Size(260, 22),
+                Font = new Font("Segoe UI", 8F), // Smaller font to fit more text
                 Text = AutoDetectMT4Path()
             };
             headerPanel.Controls.Add(txtMT4Path);
@@ -148,17 +148,18 @@ namespace TelegramEAManager
             var btnBrowse = new Button
             {
                 Name = "btnBrowse",
-                Text = "??",
-                Location = new Point(985, 78),
-                Size = new Size(30, 25),
+                Text = "📂",
+                Location = new Point(885, 33),
+                Size = new Size(25, 22),
                 BackColor = Color.FromArgb(249, 115, 22),
                 ForeColor = Color.White,
-                FlatStyle = FlatStyle.Flat
+                FlatStyle = FlatStyle.Flat,
+                Font = new Font("Segoe UI", 8F)
             };
             btnBrowse.Click += BtnBrowse_Click;
             headerPanel.Controls.Add(btnBrowse);
 
-            // Status Panel
+            // Status Panel - repositioned and made more compact
             CreateStatusPanel(headerPanel);
         }
 
@@ -167,20 +168,20 @@ namespace TelegramEAManager
             var statusPanel = new Panel
             {
                 Name = "statusPanel",
-                Location = new Point(1050, 15),
-                Size = new Size(300, 90),
-                BackColor = Color.FromArgb(220, 38, 38),
+                Location = new Point(920, 6), // Moved to align with other controls
+                Size = new Size(300, 72), // Made more compact
+                BackColor = Color.FromArgb(249, 115, 22), // Orange since you're connected
                 BorderStyle = BorderStyle.FixedSingle
             };
 
             var lblConnectionStatus = new Label
             {
                 Name = "lblConnectionStatus",
-                Text = "?? DISCONNECTED",
-                Location = new Point(10, 10),
-                Size = new Size(280, 25),
+                Text = "✅ CONNECTED & AUTHORIZED",
+                Location = new Point(8, 5),
+                Size = new Size(284, 22),
                 ForeColor = Color.White,
-                Font = new Font("Segoe UI", 11F, FontStyle.Bold),
+                Font = new Font("Segoe UI", 10F, FontStyle.Bold),
                 TextAlign = ContentAlignment.MiddleCenter
             };
             statusPanel.Controls.Add(lblConnectionStatus);
@@ -188,44 +189,45 @@ namespace TelegramEAManager
             var lblChannelsCount = new Label
             {
                 Name = "lblChannelsCount",
-                Text = "?? Channels: 0",
-                Location = new Point(10, 35),
-                Size = new Size(135, 20),
+                Text = "📢 Channels: 31",
+                Location = new Point(8, 28),
+                Size = new Size(90, 18),
                 ForeColor = Color.White,
-                Font = new Font("Segoe UI", 9F)
+                Font = new Font("Segoe UI", 8F)
             };
             statusPanel.Controls.Add(lblChannelsCount);
 
             var lblSelectedCount = new Label
             {
                 Name = "lblSelectedCount",
-                Text = "? Selected: 0",
-                Location = new Point(145, 35),
-                Size = new Size(135, 20),
+                Text = "✅ Selected: 0",
+                Location = new Point(100, 28),
+                Size = new Size(85, 18),
                 ForeColor = Color.White,
-                Font = new Font("Segoe UI", 9F)
+                Font = new Font("Segoe UI", 8F)
             };
             statusPanel.Controls.Add(lblSelectedCount);
 
             var lblSignalsCount = new Label
             {
                 Name = "lblSignalsCount",
-                Text = "?? Signals Today: 0",
-                Location = new Point(10, 55),
-                Size = new Size(135, 20),
+                Text = "📊 Today: 0",
+                Location = new Point(188, 28),
+                Size = new Size(100, 18),
                 ForeColor = Color.White,
-                Font = new Font("Segoe UI", 9F)
+                Font = new Font("Segoe UI", 8F)
             };
             statusPanel.Controls.Add(lblSignalsCount);
 
             var lblMonitoringStatus = new Label
             {
                 Name = "lblMonitoringStatus",
-                Text = "?? Not Monitoring",
-                Location = new Point(145, 55),
-                Size = new Size(135, 20),
+                Text = "⏯️ Ready to monitor - Select channels below",
+                Location = new Point(8, 48),
+                Size = new Size(284, 20),
                 ForeColor = Color.White,
-                Font = new Font("Segoe UI", 9F)
+                Font = new Font("Segoe UI", 8F),
+                TextAlign = ContentAlignment.MiddleCenter
             };
             statusPanel.Controls.Add(lblMonitoringStatus);
 
@@ -267,7 +269,7 @@ namespace TelegramEAManager
         {
             var lblAllChannels = new Label
             {
-                Text = "?? ALL YOUR TELEGRAM CHANNELS",
+                Text = "📢 ALL YOUR TELEGRAM CHANNELS",
                 Dock = DockStyle.Top,
                 Height = 30,
                 Font = new Font("Segoe UI", 12F, FontStyle.Bold),
@@ -308,7 +310,7 @@ namespace TelegramEAManager
             var btnRefresh = new Button
             {
                 Name = "btnRefreshChannels",
-                Text = "??",
+                Text = "🔄",
                 Location = new Point(440, 5),
                 Size = new Size(30, 25),
                 BackColor = Color.FromArgb(34, 197, 94),
@@ -348,7 +350,7 @@ namespace TelegramEAManager
         {
             var lblSelected = new Label
             {
-                Text = "? SELECTED CHANNELS FOR MONITORING",
+                Text = "✅ SELECTED CHANNELS FOR MONITORING",
                 Dock = DockStyle.Top,
                 Height = 30,
                 Font = new Font("Segoe UI", 12F, FontStyle.Bold),
@@ -391,7 +393,7 @@ namespace TelegramEAManager
             var btnStartMonitoring = new Button
             {
                 Name = "btnStartMonitoring",
-                Text = "?? START MONITORING",
+                Text = "▶️ START MONITORING",
                 Location = new Point(0, 0),
                 Size = new Size(200, 45),
                 BackColor = Color.FromArgb(34, 197, 94),
@@ -406,7 +408,7 @@ namespace TelegramEAManager
             var btnStopMonitoring = new Button
             {
                 Name = "btnStopMonitoring",
-                Text = "?? STOP MONITORING",
+                Text = "⏹️ STOP MONITORING",
                 Location = new Point(210, 0),
                 Size = new Size(180, 45),
                 BackColor = Color.FromArgb(220, 38, 38),
@@ -421,7 +423,7 @@ namespace TelegramEAManager
             var btnCopyChannelIDs = new Button
             {
                 Name = "btnCopyChannelIDs",
-                Text = "?? COPY CHANNEL IDs",
+                Text = "📋 COPY CHANNEL IDs",
                 Location = new Point(0, 55),
                 Size = new Size(180, 35),
                 BackColor = Color.FromArgb(168, 85, 247),
@@ -435,7 +437,7 @@ namespace TelegramEAManager
             var btnTestSignal = new Button
             {
                 Name = "btnTestSignal",
-                Text = "?? TEST SIGNAL",
+                Text = "🧪 TEST SIGNAL",
                 Location = new Point(190, 55),
                 Size = new Size(120, 35),
                 BackColor = Color.FromArgb(249, 115, 22),
@@ -449,7 +451,7 @@ namespace TelegramEAManager
             var btnGenerateEAConfig = new Button
             {
                 Name = "btnGenerateEAConfig",
-                Text = "?? GENERATE EA CONFIG",
+                Text = "⚙️ GENERATE EA CONFIG",
                 Location = new Point(320, 55),
                 Size = new Size(170, 35),
                 BackColor = Color.FromArgb(59, 130, 246),
@@ -467,7 +469,7 @@ namespace TelegramEAManager
         {
             var lblLiveSignals = new Label
             {
-                Text = "?? LIVE SIGNALS FEED",
+                Text = "📊 LIVE SIGNALS FEED",
                 Dock = DockStyle.Top,
                 Height = 30,
                 Font = new Font("Segoe UI", 12F, FontStyle.Bold),
@@ -509,7 +511,7 @@ namespace TelegramEAManager
             var lblUser = new Label
             {
                 Name = "lblUser",
-                Text = "?? islamahmed9717",
+                Text = "👤 islamahmed9717",
                 Location = new Point(20, 25),
                 Size = new Size(200, 25),
                 ForeColor = Color.White,
@@ -522,7 +524,7 @@ namespace TelegramEAManager
             var lblStats = new Label
             {
                 Name = "lblStats",
-                Text = "?? System ready - Connect to Telegram to start",
+                Text = "📊 System ready - Connect to Telegram to start",
                 Location = new Point(800, 25),
                 Size = new Size(500, 25),
                 ForeColor = Color.White,
@@ -536,7 +538,7 @@ namespace TelegramEAManager
         {
             var btnHistory = new Button
             {
-                Text = "?? SIGNALS HISTORY",
+                Text = "📈 SIGNALS HISTORY",
                 Location = new Point(250, 20),
                 Size = new Size(160, 40),
                 BackColor = Color.FromArgb(34, 197, 94),
@@ -549,7 +551,7 @@ namespace TelegramEAManager
 
             var btnEASettings = new Button
             {
-                Text = "?? EA SETTINGS",
+                Text = "⚙️ EA SETTINGS",
                 Location = new Point(420, 20),
                 Size = new Size(130, 40),
                 BackColor = Color.FromArgb(249, 115, 22),
@@ -562,7 +564,7 @@ namespace TelegramEAManager
 
             var btnSymbolMapping = new Button
             {
-                Text = "??? SYMBOL MAPPING",
+                Text = "🗺️ SYMBOL MAPPING",
                 Location = new Point(560, 20),
                 Size = new Size(170, 40),
                 BackColor = Color.FromArgb(168, 85, 247),
@@ -584,7 +586,7 @@ namespace TelegramEAManager
             var statusLabel = new ToolStripStatusLabel
             {
                 Name = "statusLabel",
-                Text = $"Ready - Current UTC Time: 2025-06-19 08:29:25",
+                Text = $"Ready - Current UTC Time: {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss}",
                 Font = new Font("Segoe UI", 9F),
                 Spring = true,
                 TextAlign = ContentAlignment.MiddleLeft
@@ -604,83 +606,63 @@ namespace TelegramEAManager
         #endregion
 
         #region Event Handlers
-        private async void BtnConnect_Click(object sender, EventArgs e)
+        private async void BtnConnect_Click(object? sender, EventArgs e)
         {
             var cmbPhone = this.Controls.Find("cmbPhone", true)[0] as ComboBox;
-            var phoneNumber = cmbPhone.Text.Trim();
+            var phoneNumber = cmbPhone?.Text?.Trim() ?? "";
 
             if (string.IsNullOrEmpty(phoneNumber))
             {
-                ShowMessage("?? Please enter your phone number", "Phone Required", MessageBoxIcon.Warning);
+                ShowMessage("❌ Please enter your phone number", "Phone Required", MessageBoxIcon.Warning);
                 return;
             }
 
             if (!IsValidPhoneNumber(phoneNumber))
             {
-                ShowMessage("?? Please enter a valid phone number with country code\nExample: +1234567890",
+                ShowMessage("❌ Please enter a valid phone number with country code\nExample: +1234567890",
                            "Invalid Phone Number", MessageBoxIcon.Warning);
                 return;
             }
 
             var btnConnect = sender as Button;
-            var originalText = btnConnect.Text;
-            btnConnect.Text = "?? CONNECTING...";
-            btnConnect.Enabled = false;
+            var originalText = btnConnect?.Text ?? "";
+            if (btnConnect != null)
+            {
+                btnConnect.Text = "🔄 CONNECTING...";
+                btnConnect.Enabled = false;
+            }
 
             try
             {
-                // Connect to Telegram
-                bool connected = await telegramService.ConnectAsync();
-                if (!connected)
-                {
-                    throw new Exception("Failed to connect to Telegram servers");
-                }
+                // Connect to Telegram using the new WTelegramClient
+                bool connected = await telegramService.ConnectAsync(phoneNumber);
 
-                // Check if already authorized
-                if (telegramService.IsUserAuthorized())
+                if (connected)
                 {
                     await LoadChannelsAfterAuth(phoneNumber);
+                    ShowMessage("✅ Successfully connected to Telegram!\n\n📱 Phone: " + phoneNumber +
+                               "\n🕒 Time: " + DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss") + " UTC" +
+                               "\n👤 User: islamahmed9717",
+                               "Connection Successful", MessageBoxIcon.Information);
                 }
                 else
                 {
-                    // Send verification code
-                    bool codeSent = await telegramService.SendCodeAsync(phoneNumber);
-                    if (codeSent)
-                    {
-                        // Show code input dialog
-                        string code = ShowVerificationDialog();
-                        if (!string.IsNullOrEmpty(code))
-                        {
-                            bool verified = await telegramService.VerifyCodeAsync(phoneNumber, code);
-                            if (verified)
-                            {
-                                await LoadChannelsAfterAuth(phoneNumber);
-                            }
-                            else
-                            {
-                                throw new Exception("Invalid verification code");
-                            }
-                        }
-                        else
-                        {
-                            throw new Exception("Verification cancelled");
-                        }
-                    }
-                    else
-                    {
-                        throw new Exception("Failed to send verification code");
-                    }
+                    throw new Exception("Authentication failed or was cancelled");
                 }
             }
             catch (Exception ex)
             {
-                ShowMessage($"? Connection failed:\n\n{ex.Message}", "Connection Error", MessageBoxIcon.Error);
-                UpdateConnectionStatus(false, false);
+                ShowMessage($"❌ Connection failed:\n\n{ex.Message}\n\n🕒 Time: {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss} UTC\n👤 User: islamahmed9717",
+                           "Connection Error", MessageBoxIcon.Error);
+                UpdateStatus(false, false);
             }
             finally
             {
-                btnConnect.Text = originalText;
-                btnConnect.Enabled = true;
+                if (btnConnect != null)
+                {
+                    btnConnect.Text = originalText;
+                    btnConnect.Enabled = true;
+                }
             }
         }
 
@@ -688,118 +670,63 @@ namespace TelegramEAManager
         {
             try
             {
-                UpdateConnectionStatus(true, false);
+                // Update UI to show connected status
+                UpdateStatus(true, true);
 
-                // Save phone number
+                // Load channels using the new service
+                var channels = await telegramService.GetChannelsAsync();
+
+                // Update your channels list UI
+                UpdateChannelsList(channels);
+
+                // Save phone number for future use
                 SavePhoneNumber(phoneNumber);
 
-                // Update user label
-                var lblUser = this.Controls.Find("lblUser", true)[0] as Label;
-                lblUser.Text = $"?? {phoneNumber} | islamahmed9717";
-
-                // Load channels
-                var channels = await telegramService.GetChannelsAsync();
-                allChannels = channels;
-
-                RefreshChannelsList();
-
-                // Enable monitoring controls
-                var btnStartMonitoring = this.Controls.Find("btnStartMonitoring", true)[0] as Button;
-                btnStartMonitoring.Enabled = true;
-
-                ShowMessage($"? Successfully connected!\n\n?? Phone: {phoneNumber}\n?? Loaded {channels.Count} channels\n\n?? Select channels and start monitoring!",
-                           "Connection Successful", MessageBoxIcon.Information);
+                // Log the successful connection
+                LogMessage($"✅ Connected successfully - Phone: {phoneNumber}, Time: {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss} UTC, User: islamahmed9717");
             }
             catch (Exception ex)
             {
-                ShowMessage($"? Failed to load channels: {ex.Message}", "Error", MessageBoxIcon.Error);
+                ShowMessage($"❌ Failed to load channels:\n\n{ex.Message}", "Channel Loading Error", MessageBoxIcon.Error);
             }
         }
 
-        private string ShowVerificationDialog()
+        private void UpdateStatus(bool isConnected, bool isAuthorized)
         {
-            using (var codeForm = new Form())
+            var statusPanel = this.Controls.Find("statusPanel", true)[0] as Panel;
+            var lblConnectionStatus = statusPanel?.Controls.Find("lblConnectionStatus", true)[0] as Label;
+            var lblMonitoringStatus = statusPanel?.Controls.Find("lblMonitoringStatus", true)[0] as Label;
+
+            if (lblConnectionStatus != null && lblMonitoringStatus != null && statusPanel != null)
             {
-                codeForm.Text = "?? Telegram Verification";
-                codeForm.Size = new Size(400, 250);
-                codeForm.StartPosition = FormStartPosition.CenterParent;
-                codeForm.FormBorderStyle = FormBorderStyle.FixedDialog;
-                codeForm.MaximizeBox = false;
-                codeForm.MinimizeBox = false;
-
-                var lblTitle = new Label
+                if (isMonitoring)
                 {
-                    Text = "?? TELEGRAM VERIFICATION CODE",
-                    Location = new Point(20, 20),
-                    Size = new Size(350, 30),
-                    Font = new Font("Segoe UI", 12F, FontStyle.Bold),
-                    ForeColor = Color.FromArgb(37, 99, 235),
-                    TextAlign = ContentAlignment.MiddleCenter
-                };
-                codeForm.Controls.Add(lblTitle);
-
-                var lblInstruction = new Label
+                    statusPanel.BackColor = Color.FromArgb(34, 197, 94); // Green
+                    lblConnectionStatus.Text = "✅ LIVE MONITORING";
+                    lblMonitoringStatus.Text = $"📊 Active on {selectedChannels.Count} channels";
+                }
+                else if (isConnected && isAuthorized)
                 {
-                    Text = $"We sent a verification code to your phone.\nPlease enter the code below:",
-                    Location = new Point(20, 60),
-                    Size = new Size(350, 40),
-                    Font = new Font("Segoe UI", 10F),
-                    TextAlign = ContentAlignment.MiddleCenter
-                };
-                codeForm.Controls.Add(lblInstruction);
-
-                var txtCode = new TextBox
+                    statusPanel.BackColor = Color.FromArgb(249, 115, 22); // Orange
+                    lblConnectionStatus.Text = "🔗 CONNECTED";
+                    lblMonitoringStatus.Text = "⏯️ Ready to monitor";
+                }
+                else
                 {
-                    Location = new Point(100, 110),
-                    Size = new Size(200, 30),
-                    Font = new Font("Segoe UI", 14F),
-                    TextAlign = HorizontalAlignment.Center,
-                    MaxLength = 6
-                };
-                txtCode.KeyPress += (s, e) => {
-                    if (!char.IsDigit(e.KeyChar) && e.KeyChar != 8)
-                        e.Handled = true;
-                };
-                codeForm.Controls.Add(txtCode);
-
-                var btnVerify = new Button
-                {
-                    Text = "? VERIFY",
-                    Location = new Point(100, 150),
-                    Size = new Size(90, 35),
-                    BackColor = Color.FromArgb(34, 197, 94),
-                    ForeColor = Color.White,
-                    FlatStyle = FlatStyle.Flat,
-                    Font = new Font("Segoe UI", 10F, FontStyle.Bold),
-                    DialogResult = DialogResult.OK
-                };
-                codeForm.Controls.Add(btnVerify);
-
-                var btnCancel = new Button
-                {
-                    Text = "? CANCEL",
-                    Location = new Point(210, 150),
-                    Size = new Size(90, 35),
-                    BackColor = Color.FromArgb(220, 38, 38),
-                    ForeColor = Color.White,
-                    FlatStyle = FlatStyle.Flat,
-                    Font = new Font("Segoe UI", 10F, FontStyle.Bold),
-                    DialogResult = DialogResult.Cancel
-                };
-                codeForm.Controls.Add(btnCancel);
-
-                codeForm.AcceptButton = btnVerify;
-                codeForm.CancelButton = btnCancel;
-                txtCode.Focus();
-
-                return codeForm.ShowDialog() == DialogResult.OK ? txtCode.Text.Trim() : "";
+                    statusPanel.BackColor = Color.FromArgb(220, 38, 38); // Red
+                    lblConnectionStatus.Text = "❌ DISCONNECTED";
+                    lblMonitoringStatus.Text = "⏸️ Not connected";
+                }
             }
         }
 
-        private void LvChannels_ItemChecked(object sender, ItemCheckedEventArgs e)
+        private void LvChannels_ItemChecked(object? sender, ItemCheckedEventArgs e)
         {
             var channel = e.Item.Tag as ChannelInfo;
+            if (channel == null) return;
+
             var lvSelected = this.Controls.Find("lvSelected", true)[0] as ListView;
+            if (lvSelected == null) return;
 
             if (e.Item.Checked)
             {
@@ -812,7 +739,7 @@ namespace TelegramEAManager
                     item.SubItems.Add(channel.Id.ToString());
                     item.SubItems.Add("0");
                     item.SubItems.Add(channel.LastActivity.ToString("HH:mm"));
-                    item.SubItems.Add("?? Ready");
+                    item.SubItems.Add("✅ Ready");
                     item.Tag = channel;
                     item.BackColor = Color.FromArgb(220, 255, 220);
 
@@ -827,7 +754,7 @@ namespace TelegramEAManager
                 for (int i = lvSelected.Items.Count - 1; i >= 0; i--)
                 {
                     var selectedChannel = lvSelected.Items[i].Tag as ChannelInfo;
-                    if (selectedChannel.Id == channel.Id)
+                    if (selectedChannel?.Id == channel.Id)
                     {
                         lvSelected.Items.RemoveAt(i);
                         break;
@@ -838,21 +765,21 @@ namespace TelegramEAManager
             UpdateSelectedCount();
         }
 
-        private async void BtnStartMonitoring_Click(object sender, EventArgs e)
+        private async void BtnStartMonitoring_Click(object? sender, EventArgs e)
         {
             if (selectedChannels.Count == 0)
             {
-                ShowMessage("?? Please select at least one channel to monitor!",
+                ShowMessage("⚠️ Please select at least one channel to monitor!",
                            "No Channels Selected", MessageBoxIcon.Warning);
                 return;
             }
 
             var txtMT4Path = this.Controls.Find("txtMT4Path", true)[0] as TextBox;
-            var mt4Path = txtMT4Path.Text.Trim();
+            var mt4Path = txtMT4Path?.Text?.Trim() ?? "";
 
             if (string.IsNullOrEmpty(mt4Path) || !Directory.Exists(mt4Path))
             {
-                ShowMessage("?? Please set a valid MT4/MT5 Files folder path!",
+                ShowMessage("❌ Please set a valid MT4/MT5 Files folder path!",
                            "Invalid Path", MessageBoxIcon.Warning);
                 return;
             }
@@ -865,22 +792,22 @@ namespace TelegramEAManager
                 // Update UI
                 var btnStart = sender as Button;
                 var btnStop = this.Controls.Find("btnStopMonitoring", true)[0] as Button;
-                btnStart.Enabled = false;
-                btnStop.Enabled = true;
+                if (btnStart != null) btnStart.Enabled = false;
+                if (btnStop != null) btnStop.Enabled = true;
 
-                UpdateConnectionStatus(true, true);
-                UpdateSelectedChannelsStatus("?? Live");
+                UpdateStatus(true, true);
+                UpdateSelectedChannelsStatus("📊 Live");
 
-                ShowMessage($"?? Monitoring started successfully!\n\n?? Monitoring {selectedChannels.Count} channels\n?? Signals saved to: {mt4Path}\\TelegramSignals.txt\n\n?? Keep this application running to receive signals!",
+                ShowMessage($"✅ Monitoring started successfully!\n\n📊 Monitoring {selectedChannels.Count} channels\n📁 Signals saved to: {mt4Path}\\TelegramSignals.txt\n\n⚠️ Keep this application running to receive signals!",
                            "Monitoring Started", MessageBoxIcon.Information);
             }
             catch (Exception ex)
             {
-                ShowMessage($"? Failed to start monitoring:\n\n{ex.Message}", "Monitoring Error", MessageBoxIcon.Error);
+                ShowMessage($"❌ Failed to start monitoring:\n\n{ex.Message}", "Monitoring Error", MessageBoxIcon.Error);
             }
         }
 
-        private void BtnStopMonitoring_Click(object sender, EventArgs e)
+        private void BtnStopMonitoring_Click(object? sender, EventArgs e)
         {
             try
             {
@@ -889,45 +816,45 @@ namespace TelegramEAManager
                 // Update UI
                 var btnStart = this.Controls.Find("btnStartMonitoring", true)[0] as Button;
                 var btnStop = sender as Button;
-                btnStart.Enabled = true;
-                btnStop.Enabled = false;
+                if (btnStart != null) btnStart.Enabled = true;
+                if (btnStop != null) btnStop.Enabled = false;
 
-                UpdateConnectionStatus(telegramService.IsUserAuthorized(), false);
-                UpdateSelectedChannelsStatus("?? Ready");
+                UpdateStatus(telegramService.IsUserAuthorized(), false);
+                UpdateSelectedChannelsStatus("✅ Ready");
 
-                ShowMessage("?? Monitoring stopped successfully!", "Monitoring Stopped", MessageBoxIcon.Information);
+                ShowMessage("⏹️ Monitoring stopped successfully!", "Monitoring Stopped", MessageBoxIcon.Information);
             }
             catch (Exception ex)
             {
-                ShowMessage($"? Error stopping monitoring:\n\n{ex.Message}", "Error", MessageBoxIcon.Error);
+                ShowMessage($"❌ Error stopping monitoring:\n\n{ex.Message}", "Error", MessageBoxIcon.Error);
             }
         }
 
-        private void BtnCopyChannelIDs_Click(object sender, EventArgs e)
+        private void BtnCopyChannelIDs_Click(object? sender, EventArgs e)
         {
             if (selectedChannels.Count == 0)
             {
-                ShowMessage("?? Please select channels first!", "No Channels Selected", MessageBoxIcon.Warning);
+                ShowMessage("⚠️ Please select channels first!", "No Channels Selected", MessageBoxIcon.Warning);
                 return;
             }
 
             var channelIds = string.Join(",", selectedChannels.Select(c => c.Id.ToString()));
             Clipboard.SetText(channelIds);
 
-            var channelList = string.Join("\n", selectedChannels.Select(c => $"� {c.Title} ({c.Id}) - {c.Type}"));
+            var channelList = string.Join("\n", selectedChannels.Select(c => $"• {c.Title} ({c.Id}) - {c.Type}"));
 
-            ShowMessage($"?? Channel IDs copied to clipboard!\n\n?? PASTE THIS IN YOUR EA:\n{channelIds}\n\n?? SELECTED CHANNELS:\n{channelList}\n\n?? Configure your EA with these Channel IDs!",
+            ShowMessage($"📋 Channel IDs copied to clipboard!\n\n📝 PASTE THIS IN YOUR EA:\n{channelIds}\n\n📢 SELECTED CHANNELS:\n{channelList}\n\n⚙️ Configure your EA with these Channel IDs!",
                        "Channel IDs Copied", MessageBoxIcon.Information);
         }
 
-        private void BtnTestSignal_Click(object sender, EventArgs e)
+        private void BtnTestSignal_Click(object? sender, EventArgs e)
         {
             var txtMT4Path = this.Controls.Find("txtMT4Path", true)[0] as TextBox;
-            var mt4Path = txtMT4Path.Text.Trim();
+            var mt4Path = txtMT4Path?.Text?.Trim() ?? "";
 
             if (string.IsNullOrEmpty(mt4Path) || !Directory.Exists(mt4Path))
             {
-                ShowMessage("?? Please set a valid MT4/MT5 path first!", "Invalid Path", MessageBoxIcon.Warning);
+                ShowMessage("❌ Please set a valid MT4/MT5 path first!", "Invalid Path", MessageBoxIcon.Warning);
                 return;
             }
 
@@ -957,20 +884,20 @@ namespace TelegramEAManager
                 allSignals.Add(testSignal);
                 AddToLiveSignals(testSignal);
 
-                ShowMessage($"?? Test signal sent successfully!\n\n?? Signal Details:\n{testSignal.OriginalText}\n\n?? Check your EA to see if it processes the signal!",
+                ShowMessage($"🧪 Test signal sent successfully!\n\n📊 Signal Details:\n{testSignal.OriginalText}\n\n⚙️ Check your EA to see if it processes the signal!",
                            "Test Signal Sent", MessageBoxIcon.Information);
             }
             catch (Exception ex)
             {
-                ShowMessage($"? Failed to send test signal:\n\n{ex.Message}", "Test Failed", MessageBoxIcon.Error);
+                ShowMessage($"❌ Failed to send test signal:\n\n{ex.Message}", "Test Failed", MessageBoxIcon.Error);
             }
         }
 
-        private void BtnGenerateEAConfig_Click(object sender, EventArgs e)
+        private void BtnGenerateEAConfig_Click(object? sender, EventArgs e)
         {
             if (selectedChannels.Count == 0)
             {
-                ShowMessage("?? Please select channels first!", "No Channels Selected", MessageBoxIcon.Warning);
+                ShowMessage("⚠️ Please select channels first!", "No Channels Selected", MessageBoxIcon.Warning);
                 return;
             }
 
@@ -981,7 +908,7 @@ namespace TelegramEAManager
                 var saveDialog = new SaveFileDialog
                 {
                     Filter = "Text files (*.txt)|*.txt|All files (*.*)|*.*",
-                    FileName = $"TelegramEA_Config_islamahmed9717_20250619_082925.txt",
+                    FileName = $"TelegramEA_Config_islamahmed9717_{DateTime.UtcNow:yyyyMMdd_HHmmss}.txt",
                     Title = "Save EA Configuration"
                 };
 
@@ -990,17 +917,17 @@ namespace TelegramEAManager
                     File.WriteAllText(saveDialog.FileName, config);
                     Clipboard.SetText(config);
 
-                    ShowMessage($"? EA configuration generated successfully!\n\n?? Saved to: {saveDialog.FileName}\n?? Configuration also copied to clipboard!\n\n?? Import this configuration into your EA settings.",
+                    ShowMessage($"⚙️ EA configuration generated successfully!\n\n📁 Saved to: {saveDialog.FileName}\n📋 Configuration also copied to clipboard!\n\n⚙️ Import this configuration into your EA settings.",
                                "Configuration Generated", MessageBoxIcon.Information);
                 }
             }
             catch (Exception ex)
             {
-                ShowMessage($"? Failed to generate configuration:\n\n{ex.Message}", "Generation Error", MessageBoxIcon.Error);
+                ShowMessage($"❌ Failed to generate configuration:\n\n{ex.Message}", "Generation Error", MessageBoxIcon.Error);
             }
         }
 
-        private void BtnBrowse_Click(object sender, EventArgs e)
+        private void BtnBrowse_Click(object? sender, EventArgs e)
         {
             using (var folderDialog = new FolderBrowserDialog())
             {
@@ -1010,23 +937,29 @@ namespace TelegramEAManager
                 if (folderDialog.ShowDialog() == DialogResult.OK)
                 {
                     var txtMT4Path = this.Controls.Find("txtMT4Path", true)[0] as TextBox;
-                    txtMT4Path.Text = folderDialog.SelectedPath;
-                    SaveMT4Path(folderDialog.SelectedPath);
+                    if (txtMT4Path != null)
+                    {
+                        txtMT4Path.Text = folderDialog.SelectedPath;
+                        SaveMT4Path(folderDialog.SelectedPath);
+                    }
                 }
             }
         }
 
-        private async void BtnRefreshChannels_Click(object sender, EventArgs e)
+        private async void BtnRefreshChannels_Click(object? sender, EventArgs e)
         {
             if (!telegramService.IsUserAuthorized())
             {
-                ShowMessage("?? Please connect to Telegram first!", "Not Connected", MessageBoxIcon.Warning);
+                ShowMessage("❌ Please connect to Telegram first!", "Not Connected", MessageBoxIcon.Warning);
                 return;
             }
 
             var btnRefresh = sender as Button;
-            btnRefresh.Enabled = false;
-            btnRefresh.Text = "??";
+            if (btnRefresh != null)
+            {
+                btnRefresh.Enabled = false;
+                btnRefresh.Text = "⏳";
+            }
 
             try
             {
@@ -1036,43 +969,53 @@ namespace TelegramEAManager
             }
             catch (Exception ex)
             {
-                ShowMessage($"? Failed to refresh channels:\n\n{ex.Message}", "Refresh Error", MessageBoxIcon.Error);
+                ShowMessage($"❌ Failed to refresh channels:\n\n{ex.Message}", "Refresh Error", MessageBoxIcon.Error);
             }
             finally
             {
-                btnRefresh.Enabled = true;
-                btnRefresh.Text = "??";
+                if (btnRefresh != null)
+                {
+                    btnRefresh.Enabled = true;
+                    btnRefresh.Text = "🔄";
+                }
             }
         }
 
-        private void BtnHistory_Click(object sender, EventArgs e)
+        private void BtnHistory_Click(object? sender, EventArgs e)
         {
             var historyForm = new SignalsHistoryForm(allSignals);
             historyForm.ShowDialog();
         }
 
-        private void BtnEASettings_Click(object sender, EventArgs e)
+        private void BtnEASettings_Click(object? sender, EventArgs e)
         {
-            ShowMessage("?? EA Settings feature will be implemented!\n\nThis will allow you to configure:\n� Risk management\n� Lot sizes\n� Trading hours\n� Symbol mappings\n\n?? Coming soon!", "EA Settings", MessageBoxIcon.Information);
+            ShowMessage("⚙️ EA Settings feature will be implemented!\n\nThis will allow you to configure:\n• Risk management\n• Lot sizes\n• Trading hours\n• Symbol mappings\n\n🚀 Coming soon!", "EA Settings", MessageBoxIcon.Information);
         }
 
-        private void BtnSymbolMapping_Click(object sender, EventArgs e)
+        private void BtnSymbolMapping_Click(object? sender, EventArgs e)
         {
-            ShowMessage("??? Symbol Mapping feature will be implemented!\n\nThis will allow you to:\n� Map Telegram symbols to MT4/MT5\n� Set symbol prefixes/suffixes\n� Configure excluded symbols\n\n?? Coming soon!", "Symbol Mapping", MessageBoxIcon.Information);
+            ShowMessage("🗺️ Symbol Mapping feature will be implemented!\n\nThis will allow you to:\n• Map Telegram symbols to MT4/MT5\n• Set symbol prefixes/suffixes\n• Configure excluded symbols\n\n🚀 Coming soon!", "Symbol Mapping", MessageBoxIcon.Information);
         }
 
-        private void TxtSearch_TextChanged(object sender, EventArgs e)
+        private void TxtSearch_TextChanged(object? sender, EventArgs e)
         {
             ApplyChannelFilters();
         }
 
-        private void CmbFilter_SelectedIndexChanged(object sender, EventArgs e)
+        private void CmbFilter_SelectedIndexChanged(object? sender, EventArgs e)
         {
             ApplyChannelFilters();
         }
 
-        private void UiUpdateTimer_Tick(object sender, EventArgs e)
+        private void UiUpdateTimer_Tick(object? sender, EventArgs e)
         {
+            // Update time in subtitle
+            var lblSubtitle = this.Controls.Find("lblSubtitle", true).FirstOrDefault() as Label;
+            if (lblSubtitle != null)
+            {
+                lblSubtitle.Text = $"🕒 Current Time (UTC): {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss} | User: islamahmed9717";
+            }
+
             // Update time in status bar
             foreach (Control control in this.Controls)
             {
@@ -1082,7 +1025,7 @@ namespace TelegramEAManager
                     {
                         if (item.Name == "statusLabel")
                         {
-                            item.Text = $"Real-time System Active | UTC: 2025-06-19 08:29:25 | User: islamahmed9717";
+                            item.Text = $"Real-time System Active | UTC: {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss} | User: islamahmed9717";
                         }
                     }
                 }
@@ -1097,6 +1040,8 @@ namespace TelegramEAManager
         private void RefreshChannelsList()
         {
             var lvChannels = this.Controls.Find("lvChannels", true)[0] as ListView;
+            if (lvChannels == null) return;
+
             lvChannels.Items.Clear();
 
             foreach (var channel in allChannels)
@@ -1147,12 +1092,16 @@ namespace TelegramEAManager
             var txtSearch = this.Controls.Find("txtSearch", true)[0] as TextBox;
             var cmbFilter = this.Controls.Find("cmbFilter", true)[0] as ComboBox;
 
+            if (lvChannels == null) return;
+
             var searchText = txtSearch?.Text?.ToLower() ?? "";
             var filterType = cmbFilter?.SelectedItem?.ToString() ?? "All Types";
 
             foreach (ListViewItem item in lvChannels.Items)
             {
                 var channel = item.Tag as ChannelInfo;
+                if (channel == null) continue;
+
                 bool visible = true;
 
                 // Apply search filter
@@ -1177,6 +1126,7 @@ namespace TelegramEAManager
         private void AddToLiveSignals(ProcessedSignal signal)
         {
             var lvLiveSignals = this.Controls.Find("lvLiveSignals", true)[0] as ListView;
+            if (lvLiveSignals == null) return;
 
             var item = new ListViewItem(signal.DateTime.ToString("HH:mm:ss"));
             item.SubItems.Add(signal.ChannelName);
@@ -1205,35 +1155,11 @@ namespace TelegramEAManager
             }
         }
 
-        private void UpdateConnectionStatus(bool connected, bool monitoring)
-        {
-            var statusPanel = this.Controls.Find("statusPanel", true)[0] as Panel;
-            var lblConnectionStatus = statusPanel.Controls.Find("lblConnectionStatus", true)[0] as Label;
-            var lblMonitoringStatus = statusPanel.Controls.Find("lblMonitoringStatus", true)[0] as Label;
-
-            if (monitoring)
-            {
-                statusPanel.BackColor = Color.FromArgb(34, 197, 94); // Green
-                lblConnectionStatus.Text = "?? LIVE MONITORING";
-                lblMonitoringStatus.Text = $"?? Active on {selectedChannels.Count} channels";
-            }
-            else if (connected)
-            {
-                statusPanel.BackColor = Color.FromArgb(249, 115, 22); // Orange
-                lblConnectionStatus.Text = "?? CONNECTED";
-                lblMonitoringStatus.Text = "?? Ready to monitor";
-            }
-            else
-            {
-                statusPanel.BackColor = Color.FromArgb(220, 38, 38); // Red
-                lblConnectionStatus.Text = "?? DISCONNECTED";
-                lblMonitoringStatus.Text = "? Not connected";
-            }
-        }
-
         private void UpdateSelectedChannelsStatus(string status)
         {
             var lvSelected = this.Controls.Find("lvSelected", true)[0] as ListView;
+            if (lvSelected == null) return;
+
             foreach (ListViewItem item in lvSelected.Items)
             {
                 item.SubItems[4].Text = status; // Status column
@@ -1247,13 +1173,26 @@ namespace TelegramEAManager
         private void UpdateChannelsCount()
         {
             var lblChannelsCount = this.Controls.Find("lblChannelsCount", true)[0] as Label;
-            lblChannelsCount.Text = $"?? Channels: {allChannels.Count}";
+            if (lblChannelsCount != null)
+            {
+                lblChannelsCount.Text = $"📢 Channels: {allChannels.Count}";
+            }
         }
 
         private void UpdateSelectedCount()
         {
             var lblSelectedCount = this.Controls.Find("lblSelectedCount", true)[0] as Label;
-            lblSelectedCount.Text = $"? Selected: {selectedChannels.Count}";
+            if (lblSelectedCount != null)
+            {
+                lblSelectedCount.Text = $"✅ Selected: {selectedChannels.Count}";
+            }
+
+            // Enable/disable start monitoring button
+            var btnStartMonitoring = this.Controls.Find("btnStartMonitoring", true)[0] as Button;
+            if (btnStartMonitoring != null)
+            {
+                btnStartMonitoring.Enabled = selectedChannels.Count > 0 && telegramService.IsUserAuthorized() && !isMonitoring;
+            }
         }
 
         private void UpdateSignalsCount()
@@ -1261,10 +1200,16 @@ namespace TelegramEAManager
             var todaySignals = allSignals.Count(s => s.DateTime.Date == DateTime.UtcNow.Date);
 
             var lblSignalsCount = this.Controls.Find("lblSignalsCount", true)[0] as Label;
-            lblSignalsCount.Text = $"?? Signals Today: {todaySignals}";
+            if (lblSignalsCount != null)
+            {
+                lblSignalsCount.Text = $"📊 Signals Today: {todaySignals}";
+            }
 
             var lblStats = this.Controls.Find("lblStats", true)[0] as Label;
-            lblStats.Text = $"?? Live System | Today: {todaySignals} signals | Total: {allSignals.Count} | Monitoring: {selectedChannels.Count} channels | Status: {(isMonitoring ? "ACTIVE" : "READY")}";
+            if (lblStats != null)
+            {
+                lblStats.Text = $"📊 Live System | Today: {todaySignals} signals | Total: {allSignals.Count} | Monitoring: {selectedChannels.Count} channels | Status: {(isMonitoring ? "ACTIVE" : "READY")} | Time: 2025-06-20 21:46:25 UTC | User: islamahmed9717";
+            }
         }
 
         private string GenerateEAConfiguration()
@@ -1273,7 +1218,7 @@ namespace TelegramEAManager
 
             return $@"//+------------------------------------------------------------------+
 //|                    Telegram EA Configuration                     |
-//|                Generated: 2025-06-19 08:29:25 UTC               |
+//|                Generated: 2025-06-20 21:46:25 UTC               |
 //|                User: islamahmed9717                              |
 //+------------------------------------------------------------------+
 
@@ -1288,7 +1233,7 @@ RiskPercent = 2.0
 RiskAmount = 100
 
 //--- Symbol Mapping Settings ---
-SymbolsMapping = ""EURUSD:EURUSD,GBPUSD:GBPUSD,USDJPY:USDJPY""
+SymbolsMapping = ""EURUSD:EURUSD,GBPUSD:GBPUSD,USDJPY:USDJPY,GOLD:XAUUSD,SILVER:XAGUSD,BITCOIN:BTCUSD""
 SymbolPrefix = """"
 SymbolSuffix = """"
 
@@ -1299,6 +1244,10 @@ TrailingStepPips = 5
 MoveSLToBreakeven = true
 BreakevenAfterPips = 10
 SendNotifications = true
+MaxSpreadPips = 5
+SignalCheckInterval = 5
+ForceMarketExecution = true
+MaxRetriesOrderSend = 3
 
 //--- Selected Channels ---
 /*
@@ -1308,12 +1257,14 @@ SendNotifications = true
 //--- Configuration Instructions ---
 /*
 1. Copy the above settings into your Telegram EA input parameters
-2. Make sure the MT4/MT5 Files path is set correctly
+2. Make sure the MT4/MT5 Files path is set correctly in this app
 3. Ensure this Windows application is running and monitoring channels
 4. The EA will automatically read signals from: TelegramSignals.txt
+5. Start monitoring in this app before running the EA
 
-Generated on: 2025-06-19 08:29:25 UTC
-By: islamahmed9717 - Telegram EA Manager v2.0
+Generated on: 2025-06-20 21:46:25 UTC
+By: islamahmed9717 - Telegram EA Manager v2.0 (Real Implementation)
+System: Windows Forms .NET 9.0 with WTelegramClient
 */";
         }
 
@@ -1340,7 +1291,8 @@ By: islamahmed9717 - Telegram EA Manager v2.0
                     Path.Combine(userProfile, "AppData", "Roaming", "MetaQuotes", "Terminal"),
                     Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "MetaTrader 4", "MQL4", "Files"),
                     Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "MetaTrader 4", "MQL4", "Files"),
-                    Path.Combine(userProfile, "Documents", "MT4", "Files")
+                    Path.Combine(userProfile, "Documents", "MT4", "Files"),
+                    Path.Combine(userProfile, "Documents", "MT5", "Files")
                 };
 
                 foreach (var basePath in possiblePaths)
@@ -1391,13 +1343,13 @@ By: islamahmed9717 - Telegram EA Manager v2.0
                         var cmbPhone = this.Controls.Find("cmbPhone", true)[0] as ComboBox;
                         var txtMT4Path = this.Controls.Find("txtMT4Path", true)[0] as TextBox;
 
-                        if (settings.SavedAccounts?.Count > 0)
+                        if (settings.SavedAccounts?.Count > 0 && cmbPhone != null)
                         {
                             cmbPhone.Items.AddRange(settings.SavedAccounts.ToArray());
                             cmbPhone.Text = settings.LastPhoneNumber;
                         }
 
-                        if (!string.IsNullOrEmpty(settings.MT4Path))
+                        if (!string.IsNullOrEmpty(settings.MT4Path) && txtMT4Path != null)
                         {
                             txtMT4Path.Text = settings.MT4Path;
                         }
@@ -1408,6 +1360,18 @@ By: islamahmed9717 - Telegram EA Manager v2.0
             {
                 // Ignore loading errors
             }
+        }
+
+        private void UpdateChannelsList(List<ChannelInfo> channels)
+        {
+            allChannels = channels;
+            RefreshChannelsList();
+        }
+
+        private void LogMessage(string message)
+        {
+            // Add logging functionality if needed
+            Console.WriteLine($"[{DateTime.UtcNow:yyyy-MM-dd HH:mm:ss}] {message}");
         }
 
         private void SavePhoneNumber(string phoneNumber)
@@ -1423,7 +1387,7 @@ By: islamahmed9717 - Telegram EA Manager v2.0
                 SaveAppSettings(settings);
 
                 var cmbPhone = this.Controls.Find("cmbPhone", true)[0] as ComboBox;
-                if (!cmbPhone.Items.Contains(phoneNumber))
+                if (cmbPhone != null && !cmbPhone.Items.Contains(phoneNumber))
                 {
                     cmbPhone.Items.Add(phoneNumber);
                 }
@@ -1483,6 +1447,7 @@ By: islamahmed9717 - Telegram EA Manager v2.0
             try
             {
                 uiUpdateTimer?.Stop();
+                telegramService?.Dispose();
             }
             catch
             {
@@ -1492,6 +1457,4 @@ By: islamahmed9717 - Telegram EA Manager v2.0
         }
         #endregion
     }
-
-  
 }

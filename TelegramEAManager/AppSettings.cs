@@ -9,10 +9,10 @@ namespace TelegramEAManager
     // Application settings
     public class AppSettings
     {
+        public List<string> SavedAccounts { get; set; } = new List<string>();
         public string LastPhoneNumber { get; set; } = "";
         public string MT4Path { get; set; } = "";
-        public bool AutoStartMonitoring { get; set; } = false;
-        public DateTime LastBackup { get; set; } = DateTime.MinValue;
-        public List<string> SavedAccounts { get; set; } = new List<string>();
+        public DateTime LastUsed { get; set; } = DateTime.UtcNow;
     }
+
 }

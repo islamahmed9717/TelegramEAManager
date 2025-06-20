@@ -9,14 +9,14 @@ namespace TelegramEAManager
 {
     public class SignalProcessingService
     {
-        private SymbolMapping symbolMapping;
-        private EASettings eaSettings;
-        private List<ProcessedSignal> processedSignals;
+        private SymbolMapping symbolMapping = new SymbolMapping();
+        private EASettings eaSettings = new EASettings();
+        private List<ProcessedSignal> processedSignals = new List<ProcessedSignal>();
         private readonly string signalsHistoryFile = "signals_history.json";
 
         // Events
-        public event EventHandler<ProcessedSignal> SignalProcessed;
-        public event EventHandler<string> ErrorOccurred;
+        public event EventHandler<ProcessedSignal>? SignalProcessed;
+        public event EventHandler<string>? ErrorOccurred;
 
         public SignalProcessingService()
         {
@@ -44,7 +44,10 @@ namespace TelegramEAManager
                 }
 
                 // Apply symbol mapping
-                ApplySymbolMapping(signal.ParsedData);
+                if (signal.ParsedData != null)
+                {
+                    ApplySymbolMapping(signal.ParsedData);
+                }
 
                 // Validate signal
                 if (!ValidateSignal(signal.ParsedData))
@@ -122,9 +125,10 @@ namespace TelegramEAManager
             }
         }
 
-        private bool ValidateSignal(ParsedSignalData parsedData)
+        private bool ValidateSignal(ParsedSignalData? parsedData)
         {
-            return !string.IsNullOrEmpty(parsedData.Symbol) &&
+            return parsedData != null &&
+                   !string.IsNullOrEmpty(parsedData.Symbol) &&
                    !string.IsNullOrEmpty(parsedData.Direction) &&
                    !string.IsNullOrEmpty(parsedData.FinalSymbol);
         }
@@ -151,7 +155,11 @@ namespace TelegramEAManager
                 var filePath = Path.Combine(eaSettings.MT4FilesPath, eaSettings.SignalFilePath);
 
                 // Ensure directory exists
-                Directory.CreateDirectory(Path.GetDirectoryName(filePath));
+                var directory = Path.GetDirectoryName(filePath);
+                if (!string.IsNullOrEmpty(directory))
+                {
+                    Directory.CreateDirectory(directory);
+                }
 
                 var signalText = FormatSignalForEA(signal);
 
@@ -167,21 +175,20 @@ namespace TelegramEAManager
         private string FormatSignalForEA(ProcessedSignal signal)
         {
             var formatted = $@"[{signal.DateTime:yyyy-MM-dd HH:mm:ss} UTC] - Channel: {signal.ChannelName} [{signal.ChannelId}]
-        {signal.ParsedData.Direction} NOW {signal.ParsedData.FinalSymbol}";
+{signal.ParsedData?.Direction ?? "N/A"} NOW {signal.ParsedData?.FinalSymbol ?? "N/A"}";
 
-            if (signal.ParsedData.StopLoss > 0)
+            if (signal.ParsedData?.StopLoss > 0)
                 formatted += $"\nSL {signal.ParsedData.StopLoss:F5}";
 
-            if (signal.ParsedData.TakeProfit1 > 0)
+            if (signal.ParsedData?.TakeProfit1 > 0)
                 formatted += $"\nTP {signal.ParsedData.TakeProfit1:F5}";
 
-            if (signal.ParsedData.TakeProfit2 > 0)
+            if (signal.ParsedData?.TakeProfit2 > 0)
                 formatted += $"\nTP2 {signal.ParsedData.TakeProfit2:F5}";
 
-            if (signal.ParsedData.TakeProfit3 > 0)
+            if (signal.ParsedData?.TakeProfit3 > 0)
                 formatted += $"\nTP3 {signal.ParsedData.TakeProfit3:F5}";
 
-            // Fix for CS1061: Replace 'PadLeft' with 'new string' to create a string of '=' characters
             formatted += $"\n{new string('=', 50)}\n\n";
 
             return formatted;
@@ -194,7 +201,7 @@ namespace TelegramEAManager
                 if (File.Exists("symbol_settings.json"))
                 {
                     var json = File.ReadAllText("symbol_settings.json");
-                    symbolMapping = JsonConvert.DeserializeObject<SymbolMapping>(json);
+                    symbolMapping = JsonConvert.DeserializeObject<SymbolMapping>(json) ?? new SymbolMapping();
                 }
                 else
                 {
@@ -227,7 +234,7 @@ namespace TelegramEAManager
                 if (File.Exists("ea_settings.json"))
                 {
                     var json = File.ReadAllText("ea_settings.json");
-                    eaSettings = JsonConvert.DeserializeObject<EASettings>(json);
+                    eaSettings = JsonConvert.DeserializeObject<EASettings>(json) ?? new EASettings();
                 }
                 else
                 {
