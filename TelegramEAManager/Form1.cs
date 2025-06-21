@@ -51,6 +51,7 @@ namespace TelegramEAManager
             this.Size = new Size(1400, 900);
             this.StartPosition = FormStartPosition.CenterScreen;
             this.BackColor = Color.FromArgb(245, 245, 245);
+            this.WindowState = FormWindowState.Normal;
 
             CreateHeaderPanel();
             CreateMainContent();
@@ -63,7 +64,7 @@ namespace TelegramEAManager
             var headerPanel = new Panel
             {
                 Dock = DockStyle.Top,
-                Height = 85, // Reduced from 120 to 85 to give more space for channels
+                Height = 65,
                 BackColor = Color.FromArgb(37, 99, 235)
             };
             this.Controls.Add(headerPanel);
@@ -72,40 +73,41 @@ namespace TelegramEAManager
             var lblTitle = new Label
             {
                 Text = "📊 REAL TELEGRAM EA MANAGER",
-                Location = new Point(20, 8), // Moved up slightly
-                Size = new Size(400, 30),
+                Location = new Point(20, 5),
+                Size = new Size(400, 25),
                 ForeColor = Color.White,
-                Font = new Font("Segoe UI", 15F, FontStyle.Bold) // Slightly smaller font
+                Font = new Font("Segoe UI", 14F, FontStyle.Bold)
             };
             headerPanel.Controls.Add(lblTitle);
 
             var lblSubtitle = new Label
             {
-                Text = $"🕒 Current Time (UTC): 2025-06-20 21:58:08 | User: islamahmed9717",
-                Location = new Point(20, 35), // Moved up
-                Size = new Size(500, 18),
+                Name = "lblSubtitle",
+                Text = $"🕒 Current Time (UTC): 2025-06-21 15:23:07 | User: islamahmed9717",
+                Location = new Point(20, 28),
+                Size = new Size(500, 15),
                 ForeColor = Color.FromArgb(200, 220, 255),
-                Font = new Font("Segoe UI", 9F) // Smaller font
+                Font = new Font("Segoe UI", 8F)
             };
             headerPanel.Controls.Add(lblSubtitle);
 
-            // Phone number section - more compact
+            // Phone section
             var lblPhone = new Label
             {
                 Text = "📱 Phone:",
-                Location = new Point(550, 8),
-                Size = new Size(70, 18),
+                Location = new Point(550, 5),
+                Size = new Size(70, 15),
                 ForeColor = Color.White,
-                Font = new Font("Segoe UI", 9F, FontStyle.Bold)
+                Font = new Font("Segoe UI", 8F, FontStyle.Bold)
             };
             headerPanel.Controls.Add(lblPhone);
 
             var cmbPhone = new ComboBox
             {
                 Name = "cmbPhone",
-                Location = new Point(620, 6),
-                Size = new Size(180, 25),
-                Font = new Font("Segoe UI", 10F),
+                Location = new Point(620, 3),
+                Size = new Size(180, 20),
+                Font = new Font("Segoe UI", 9F),
                 DropDownStyle = ComboBoxStyle.DropDown
             };
             headerPanel.Controls.Add(cmbPhone);
@@ -114,33 +116,33 @@ namespace TelegramEAManager
             {
                 Name = "btnConnect",
                 Text = "🔗 CONNECT",
-                Location = new Point(810, 6),
-                Size = new Size(100, 25),
+                Location = new Point(810, 3),
+                Size = new Size(100, 20),
                 BackColor = Color.FromArgb(34, 197, 94),
                 ForeColor = Color.White,
                 FlatStyle = FlatStyle.Flat,
-                Font = new Font("Segoe UI", 9F, FontStyle.Bold)
+                Font = new Font("Segoe UI", 8F, FontStyle.Bold)
             };
             btnConnect.Click += BtnConnect_Click;
             headerPanel.Controls.Add(btnConnect);
 
-            // MT4 Path - more compact
+            // MT4 Path
             var lblMT4 = new Label
             {
                 Text = "📁 MT4/MT5:",
-                Location = new Point(550, 35),
-                Size = new Size(70, 18),
+                Location = new Point(550, 28),
+                Size = new Size(70, 15),
                 ForeColor = Color.White,
-                Font = new Font("Segoe UI", 9F)
+                Font = new Font("Segoe UI", 8F)
             };
             headerPanel.Controls.Add(lblMT4);
 
             var txtMT4Path = new TextBox
             {
                 Name = "txtMT4Path",
-                Location = new Point(620, 33),
-                Size = new Size(260, 22),
-                Font = new Font("Segoe UI", 8F), // Smaller font to fit more text
+                Location = new Point(620, 26),
+                Size = new Size(260, 18),
+                Font = new Font("Segoe UI", 7F),
                 Text = AutoDetectMT4Path()
             };
             headerPanel.Controls.Add(txtMT4Path);
@@ -149,17 +151,17 @@ namespace TelegramEAManager
             {
                 Name = "btnBrowse",
                 Text = "📂",
-                Location = new Point(885, 33),
-                Size = new Size(25, 22),
+                Location = new Point(885, 26),
+                Size = new Size(25, 18),
                 BackColor = Color.FromArgb(249, 115, 22),
                 ForeColor = Color.White,
                 FlatStyle = FlatStyle.Flat,
-                Font = new Font("Segoe UI", 8F)
+                Font = new Font("Segoe UI", 7F)
             };
             btnBrowse.Click += BtnBrowse_Click;
             headerPanel.Controls.Add(btnBrowse);
 
-            // Status Panel - repositioned and made more compact
+            // Status Panel
             CreateStatusPanel(headerPanel);
         }
 
@@ -168,9 +170,9 @@ namespace TelegramEAManager
             var statusPanel = new Panel
             {
                 Name = "statusPanel",
-                Location = new Point(920, 6), // Moved to align with other controls
-                Size = new Size(300, 72), // Made more compact
-                BackColor = Color.FromArgb(249, 115, 22), // Orange since you're connected
+                Location = new Point(920, 3),
+                Size = new Size(300, 60),
+                BackColor = Color.FromArgb(249, 115, 22),
                 BorderStyle = BorderStyle.FixedSingle
             };
 
@@ -178,10 +180,10 @@ namespace TelegramEAManager
             {
                 Name = "lblConnectionStatus",
                 Text = "✅ CONNECTED & AUTHORIZED",
-                Location = new Point(8, 5),
-                Size = new Size(284, 22),
+                Location = new Point(8, 3),
+                Size = new Size(284, 15),
                 ForeColor = Color.White,
-                Font = new Font("Segoe UI", 10F, FontStyle.Bold),
+                Font = new Font("Segoe UI", 8F, FontStyle.Bold),
                 TextAlign = ContentAlignment.MiddleCenter
             };
             statusPanel.Controls.Add(lblConnectionStatus);
@@ -190,21 +192,21 @@ namespace TelegramEAManager
             {
                 Name = "lblChannelsCount",
                 Text = "📢 Channels: 31",
-                Location = new Point(8, 28),
-                Size = new Size(90, 18),
+                Location = new Point(8, 20),
+                Size = new Size(90, 12),
                 ForeColor = Color.White,
-                Font = new Font("Segoe UI", 8F)
+                Font = new Font("Segoe UI", 7F)
             };
             statusPanel.Controls.Add(lblChannelsCount);
 
             var lblSelectedCount = new Label
             {
                 Name = "lblSelectedCount",
-                Text = "✅ Selected: 0",
-                Location = new Point(100, 28),
-                Size = new Size(85, 18),
+                Text = "✅ Selected: 2",
+                Location = new Point(100, 20),
+                Size = new Size(85, 12),
                 ForeColor = Color.White,
-                Font = new Font("Segoe UI", 8F)
+                Font = new Font("Segoe UI", 7F)
             };
             statusPanel.Controls.Add(lblSelectedCount);
 
@@ -212,21 +214,21 @@ namespace TelegramEAManager
             {
                 Name = "lblSignalsCount",
                 Text = "📊 Today: 0",
-                Location = new Point(188, 28),
-                Size = new Size(100, 18),
+                Location = new Point(188, 20),
+                Size = new Size(100, 12),
                 ForeColor = Color.White,
-                Font = new Font("Segoe UI", 8F)
+                Font = new Font("Segoe UI", 7F)
             };
             statusPanel.Controls.Add(lblSignalsCount);
 
             var lblMonitoringStatus = new Label
             {
                 Name = "lblMonitoringStatus",
-                Text = "⏯️ Ready to monitor - Select channels below",
-                Location = new Point(8, 48),
+                Text = "⏯️ Ready to monitor",
+                Location = new Point(8, 35),
                 Size = new Size(284, 20),
                 ForeColor = Color.White,
-                Font = new Font("Segoe UI", 8F),
+                Font = new Font("Segoe UI", 7F),
                 TextAlign = ContentAlignment.MiddleCenter
             };
             statusPanel.Controls.Add(lblMonitoringStatus);
@@ -236,32 +238,44 @@ namespace TelegramEAManager
 
         private void CreateMainContent()
         {
-            var contentPanel = new Panel
+            // COMPLETELY REDESIGNED MAIN CONTENT STRUCTURE
+            var mainContainer = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
-                Padding = new Padding(20, 10, 20, 10)
+                ColumnCount = 2,
+                RowCount = 1,
+                Padding = new Padding(20, 15, 20, 10),
+                BackColor = Color.FromArgb(245, 245, 245)
             };
-            this.Controls.Add(contentPanel);
 
-            // Left Panel - All Channels
+            // Set column widths: 55% for channels, 45% for controls
+            mainContainer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 55F));
+            mainContainer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 45F));
+            mainContainer.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+
+            // LEFT PANEL - Channels
             var leftPanel = new Panel
             {
-                Dock = DockStyle.Left,
-                Width = 600,
-                Padding = new Padding(0, 0, 10, 0)
+                Dock = DockStyle.Fill,
+                BackColor = Color.White,
+                Padding = new Padding(5)
             };
-            contentPanel.Controls.Add(leftPanel);
+            mainContainer.Controls.Add(leftPanel, 0, 0);
 
-            CreateChannelsSection(leftPanel);
-
-            // Right Panel - Controls and Live Signals
+            // RIGHT PANEL - Controls  
             var rightPanel = new Panel
             {
                 Dock = DockStyle.Fill,
-                Padding = new Padding(10, 0, 0, 0)
+                BackColor = Color.FromArgb(248, 249, 250),
+                Padding = new Padding(10),
+                BorderStyle = BorderStyle.FixedSingle
             };
-            contentPanel.Controls.Add(rightPanel);
+            mainContainer.Controls.Add(rightPanel, 1, 0);
 
+            this.Controls.Add(mainContainer);
+
+            // Create content for both panels
+            CreateChannelsSection(leftPanel);
             CreateControlsSection(rightPanel);
         }
 
@@ -271,9 +285,11 @@ namespace TelegramEAManager
             {
                 Text = "📢 ALL YOUR TELEGRAM CHANNELS",
                 Dock = DockStyle.Top,
-                Height = 30,
+                Height = 25,
                 Font = new Font("Segoe UI", 12F, FontStyle.Bold),
-                ForeColor = Color.FromArgb(37, 99, 235)
+                ForeColor = Color.FromArgb(37, 99, 235),
+                TextAlign = ContentAlignment.MiddleLeft,
+                Padding = new Padding(5, 5, 0, 0)
             };
             parent.Controls.Add(lblAllChannels);
 
@@ -281,15 +297,17 @@ namespace TelegramEAManager
             var searchPanel = new Panel
             {
                 Dock = DockStyle.Top,
-                Height = 35
+                Height = 40,
+                Padding = new Padding(5)
             };
 
             var txtSearch = new TextBox
             {
                 Name = "txtSearch",
-                Location = new Point(0, 5),
-                Size = new Size(300, 25),
-                Font = new Font("Segoe UI", 10F)
+                Location = new Point(5, 8),
+                Size = new Size(250, 25),
+                Font = new Font("Segoe UI", 10F),
+                PlaceholderText = "Search channels..."
             };
             txtSearch.TextChanged += TxtSearch_TextChanged;
             searchPanel.Controls.Add(txtSearch);
@@ -297,7 +315,7 @@ namespace TelegramEAManager
             var cmbFilter = new ComboBox
             {
                 Name = "cmbFilter",
-                Location = new Point(310, 5),
+                Location = new Point(265, 8),
                 Size = new Size(120, 25),
                 Font = new Font("Segoe UI", 9F),
                 DropDownStyle = ComboBoxStyle.DropDownList
@@ -311,7 +329,7 @@ namespace TelegramEAManager
             {
                 Name = "btnRefreshChannels",
                 Text = "🔄",
-                Location = new Point(440, 5),
+                Location = new Point(395, 8),
                 Size = new Size(30, 25),
                 BackColor = Color.FromArgb(34, 197, 94),
                 ForeColor = Color.White,
@@ -321,9 +339,6 @@ namespace TelegramEAManager
             searchPanel.Controls.Add(btnRefresh);
 
             parent.Controls.Add(searchPanel);
-
-            var spacer = new Panel { Dock = DockStyle.Top, Height = 10 };
-            parent.Controls.Add(spacer);
 
             var lvChannels = new ListView
             {
@@ -348,152 +363,166 @@ namespace TelegramEAManager
 
         private void CreateControlsSection(Panel parent)
         {
+            // FORCE CREATE ALL CONTROLS WITH EXPLICIT POSITIONING
+
+            // SELECTED CHANNELS SECTION
             var lblSelected = new Label
             {
-                Text = "✅ SELECTED CHANNELS FOR MONITORING",
-                Dock = DockStyle.Top,
-                Height = 30,
-                Font = new Font("Segoe UI", 12F, FontStyle.Bold),
-                ForeColor = Color.FromArgb(34, 197, 94)
+                Text = "✅ SELECTED CHANNELS",
+                Location = new Point(10, 10),
+                Size = new Size(400, 25),
+                Font = new Font("Segoe UI", 11F, FontStyle.Bold),
+                ForeColor = Color.FromArgb(34, 197, 94),
+                BackColor = Color.Transparent
             };
             parent.Controls.Add(lblSelected);
 
             var lvSelected = new ListView
             {
                 Name = "lvSelected",
-                Dock = DockStyle.Top,
-                Height = 180,
+                Location = new Point(10, 40),
+                Size = new Size(480, 150),
                 View = View.Details,
                 FullRowSelect = true,
                 GridLines = true,
-                Font = new Font("Segoe UI", 9F)
+                Font = new Font("Segoe UI", 9F),
+                BackColor = Color.White
             };
 
             lvSelected.Columns.Add("Channel", 200);
             lvSelected.Columns.Add("ID", 100);
             lvSelected.Columns.Add("Signals", 60);
-            lvSelected.Columns.Add("Last Signal", 100);
-            lvSelected.Columns.Add("Status", 80);
+            lvSelected.Columns.Add("Status", 120);
 
             parent.Controls.Add(lvSelected);
 
-            CreateControlButtons(parent);
-            CreateLiveSignalsSection(parent);
-        }
-
-        private void CreateControlButtons(Panel parent)
-        {
-            var controlPanel = new Panel
+            // CONTROL BUTTONS SECTION
+            var lblControls = new Label
             {
-                Dock = DockStyle.Top,
-                Height = 120,
-                Padding = new Padding(0, 15, 0, 0)
+                Text = "🎮 MONITORING CONTROLS",
+                Location = new Point(10, 200),
+                Size = new Size(400, 25),
+                Font = new Font("Segoe UI", 11F, FontStyle.Bold),
+                ForeColor = Color.FromArgb(37, 99, 235),
+                BackColor = Color.Transparent
             };
+            parent.Controls.Add(lblControls);
 
+            // MAIN MONITORING BUTTONS - LARGE AND PROMINENT
             var btnStartMonitoring = new Button
             {
                 Name = "btnStartMonitoring",
                 Text = "▶️ START MONITORING",
-                Location = new Point(0, 0),
-                Size = new Size(200, 45),
+                Location = new Point(10, 235),
+                Size = new Size(230, 50),
                 BackColor = Color.FromArgb(34, 197, 94),
                 ForeColor = Color.White,
                 FlatStyle = FlatStyle.Flat,
                 Font = new Font("Segoe UI", 12F, FontStyle.Bold),
-                Enabled = false
+                Enabled = true, // ALWAYS VISIBLE
+                UseVisualStyleBackColor = false
             };
+            btnStartMonitoring.FlatAppearance.BorderSize = 0;
             btnStartMonitoring.Click += BtnStartMonitoring_Click;
-            controlPanel.Controls.Add(btnStartMonitoring);
+            parent.Controls.Add(btnStartMonitoring);
 
             var btnStopMonitoring = new Button
             {
                 Name = "btnStopMonitoring",
                 Text = "⏹️ STOP MONITORING",
-                Location = new Point(210, 0),
-                Size = new Size(180, 45),
+                Location = new Point(250, 235),
+                Size = new Size(200, 50),
                 BackColor = Color.FromArgb(220, 38, 38),
                 ForeColor = Color.White,
                 FlatStyle = FlatStyle.Flat,
                 Font = new Font("Segoe UI", 12F, FontStyle.Bold),
-                Enabled = false
+                Enabled = false,
+                UseVisualStyleBackColor = false
             };
+            btnStopMonitoring.FlatAppearance.BorderSize = 0;
             btnStopMonitoring.Click += BtnStopMonitoring_Click;
-            controlPanel.Controls.Add(btnStopMonitoring);
+            parent.Controls.Add(btnStopMonitoring);
 
+            // UTILITY BUTTONS - SMALLER ROW
             var btnCopyChannelIDs = new Button
             {
                 Name = "btnCopyChannelIDs",
-                Text = "📋 COPY CHANNEL IDs",
-                Location = new Point(0, 55),
-                Size = new Size(180, 35),
+                Text = "📋 COPY IDs",
+                Location = new Point(10, 295),
+                Size = new Size(105, 35),
                 BackColor = Color.FromArgb(168, 85, 247),
                 ForeColor = Color.White,
                 FlatStyle = FlatStyle.Flat,
-                Font = new Font("Segoe UI", 10F, FontStyle.Bold)
+                Font = new Font("Segoe UI", 9F, FontStyle.Bold),
+                UseVisualStyleBackColor = false
             };
+            btnCopyChannelIDs.FlatAppearance.BorderSize = 0;
             btnCopyChannelIDs.Click += BtnCopyChannelIDs_Click;
-            controlPanel.Controls.Add(btnCopyChannelIDs);
+            parent.Controls.Add(btnCopyChannelIDs);
 
             var btnTestSignal = new Button
             {
                 Name = "btnTestSignal",
-                Text = "🧪 TEST SIGNAL",
-                Location = new Point(190, 55),
-                Size = new Size(120, 35),
+                Text = "🧪 TEST",
+                Location = new Point(125, 295),
+                Size = new Size(85, 35),
                 BackColor = Color.FromArgb(249, 115, 22),
                 ForeColor = Color.White,
                 FlatStyle = FlatStyle.Flat,
-                Font = new Font("Segoe UI", 10F, FontStyle.Bold)
+                Font = new Font("Segoe UI", 9F, FontStyle.Bold),
+                UseVisualStyleBackColor = false
             };
+            btnTestSignal.FlatAppearance.BorderSize = 0;
             btnTestSignal.Click += BtnTestSignal_Click;
-            controlPanel.Controls.Add(btnTestSignal);
+            parent.Controls.Add(btnTestSignal);
 
             var btnGenerateEAConfig = new Button
             {
                 Name = "btnGenerateEAConfig",
-                Text = "⚙️ GENERATE EA CONFIG",
-                Location = new Point(320, 55),
-                Size = new Size(170, 35),
+                Text = "⚙️ CONFIG",
+                Location = new Point(220, 295),
+                Size = new Size(100, 35),
                 BackColor = Color.FromArgb(59, 130, 246),
                 ForeColor = Color.White,
                 FlatStyle = FlatStyle.Flat,
-                Font = new Font("Segoe UI", 10F, FontStyle.Bold)
+                Font = new Font("Segoe UI", 9F, FontStyle.Bold),
+                UseVisualStyleBackColor = false
             };
+            btnGenerateEAConfig.FlatAppearance.BorderSize = 0;
             btnGenerateEAConfig.Click += BtnGenerateEAConfig_Click;
-            controlPanel.Controls.Add(btnGenerateEAConfig);
+            parent.Controls.Add(btnGenerateEAConfig);
 
-            parent.Controls.Add(controlPanel);
-        }
-
-        private void CreateLiveSignalsSection(Panel parent)
-        {
+            // LIVE SIGNALS SECTION
             var lblLiveSignals = new Label
             {
                 Text = "📊 LIVE SIGNALS FEED",
-                Dock = DockStyle.Top,
-                Height = 30,
-                Font = new Font("Segoe UI", 12F, FontStyle.Bold),
-                ForeColor = Color.FromArgb(249, 115, 22)
+                Location = new Point(10, 340),
+                Size = new Size(400, 25),
+                Font = new Font("Segoe UI", 11F, FontStyle.Bold),
+                ForeColor = Color.FromArgb(249, 115, 22),
+                BackColor = Color.Transparent
             };
             parent.Controls.Add(lblLiveSignals);
 
             var lvLiveSignals = new ListView
             {
                 Name = "lvLiveSignals",
-                Dock = DockStyle.Fill,
+                Location = new Point(10, 370),
+                Size = new Size(480, 200),
                 View = View.Details,
                 FullRowSelect = true,
                 GridLines = true,
-                Font = new Font("Segoe UI", 9F)
+                Font = new Font("Segoe UI", 8F),
+                BackColor = Color.White
             };
 
-            lvLiveSignals.Columns.Add("Time", 80);
-            lvLiveSignals.Columns.Add("Channel", 120);
-            lvLiveSignals.Columns.Add("Symbol", 80);
-            lvLiveSignals.Columns.Add("Direction", 60);
-            lvLiveSignals.Columns.Add("SL", 70);
-            lvLiveSignals.Columns.Add("TP", 70);
-            lvLiveSignals.Columns.Add("Status", 120);
+            lvLiveSignals.Columns.Add("Time", 60);
+            lvLiveSignals.Columns.Add("Channel", 100);
+            lvLiveSignals.Columns.Add("Symbol", 60);
+            lvLiveSignals.Columns.Add("Direction", 50);
+            lvLiveSignals.Columns.Add("SL", 50);
+            lvLiveSignals.Columns.Add("TP", 50);
+            lvLiveSignals.Columns.Add("Status", 110);
 
             parent.Controls.Add(lvLiveSignals);
         }
@@ -738,7 +767,6 @@ namespace TelegramEAManager
                     var item = new ListViewItem(channel.Title);
                     item.SubItems.Add(channel.Id.ToString());
                     item.SubItems.Add("0");
-                    item.SubItems.Add(channel.LastActivity.ToString("HH:mm"));
                     item.SubItems.Add("✅ Ready");
                     item.Tag = channel;
                     item.BackColor = Color.FromArgb(220, 255, 220);
@@ -786,7 +814,7 @@ namespace TelegramEAManager
 
             try
             {
-                // Start monitoring (simulated)
+                // Start monitoring
                 isMonitoring = true;
 
                 // Update UI
@@ -994,7 +1022,7 @@ namespace TelegramEAManager
 
         private void BtnSymbolMapping_Click(object? sender, EventArgs e)
         {
-            ShowMessage("🗺️ Symbol Mapping feature will be implemented!\n\nThis will allow you to:\n• Map Telegram symbols to MT4/MT5\n• Set symbol prefixes/suffixes\n• Configure excluded symbols\n\n🚀 Coming soon!", "Symbol Mapping", MessageBoxIcon.Information);
+            ShowMessage("🗺️ Symbol Mapping feature will be implemented!\n\nThis will allow you to:\n• Map Telegram symbols to MT4/MT5\n• Set symbol prefixes/suffixes\n• Configure exclusions\n\n🚀 Coming soon!", "Symbol Mapping", MessageBoxIcon.Information);
         }
 
         private void TxtSearch_TextChanged(object? sender, EventArgs e)
@@ -1162,7 +1190,7 @@ namespace TelegramEAManager
 
             foreach (ListViewItem item in lvSelected.Items)
             {
-                item.SubItems[4].Text = status; // Status column
+                item.SubItems[3].Text = status; // Status column (index 3 now since we removed one column)
                 if (status.Contains("Live"))
                     item.BackColor = Color.FromArgb(200, 255, 200);
                 else
@@ -1187,11 +1215,11 @@ namespace TelegramEAManager
                 lblSelectedCount.Text = $"✅ Selected: {selectedChannels.Count}";
             }
 
-            // Enable/disable start monitoring button
+            // SIMPLIFIED - Button enabled when channels selected and not monitoring
             var btnStartMonitoring = this.Controls.Find("btnStartMonitoring", true)[0] as Button;
             if (btnStartMonitoring != null)
             {
-                btnStartMonitoring.Enabled = selectedChannels.Count > 0 && telegramService.IsUserAuthorized() && !isMonitoring;
+                btnStartMonitoring.Enabled = selectedChannels.Count > 0 && !isMonitoring;
             }
         }
 
@@ -1202,13 +1230,13 @@ namespace TelegramEAManager
             var lblSignalsCount = this.Controls.Find("lblSignalsCount", true)[0] as Label;
             if (lblSignalsCount != null)
             {
-                lblSignalsCount.Text = $"📊 Signals Today: {todaySignals}";
+                lblSignalsCount.Text = $"📊 Today: {todaySignals}";
             }
 
             var lblStats = this.Controls.Find("lblStats", true)[0] as Label;
             if (lblStats != null)
             {
-                lblStats.Text = $"📊 Live System | Today: {todaySignals} signals | Total: {allSignals.Count} | Monitoring: {selectedChannels.Count} channels | Status: {(isMonitoring ? "ACTIVE" : "READY")} | Time: 2025-06-20 21:46:25 UTC | User: islamahmed9717";
+                lblStats.Text = $"📊 Live System | Today: {todaySignals} signals | Total: {allSignals.Count} | Monitoring: {selectedChannels.Count} channels | Status: {(isMonitoring ? "ACTIVE" : "READY")}";
             }
         }
 
@@ -1218,7 +1246,7 @@ namespace TelegramEAManager
 
             return $@"//+------------------------------------------------------------------+
 //|                    Telegram EA Configuration                     |
-//|                Generated: 2025-06-20 21:46:25 UTC               |
+//|                Generated: {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss} UTC               |
 //|                User: islamahmed9717                              |
 //+------------------------------------------------------------------+
 
@@ -1262,7 +1290,7 @@ MaxRetriesOrderSend = 3
 4. The EA will automatically read signals from: TelegramSignals.txt
 5. Start monitoring in this app before running the EA
 
-Generated on: 2025-06-20 21:46:25 UTC
+Generated on: {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss} UTC
 By: islamahmed9717 - Telegram EA Manager v2.0 (Real Implementation)
 System: Windows Forms .NET 9.0 with WTelegramClient
 */";
