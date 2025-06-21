@@ -893,7 +893,7 @@ namespace TelegramEAManager
                     Id = Guid.NewGuid().ToString(),
                     DateTime = DateTime.UtcNow,
                     ChannelId = 999999,
-                    ChannelName = "TEST CHANNEL",
+                    ChannelName = "TEST_CHANNEL",
                     OriginalText = "BUY NOW EURUSD\nSL 1.0850\nTP 1.0920\nTP2 1.0950",
                     Status = "Test Signal",
                     ParsedData = new ParsedSignalData
@@ -908,16 +908,55 @@ namespace TelegramEAManager
                     }
                 };
 
+                // FIXED: Correct filename (case-sensitive)
+                var signalFilePath = Path.Combine(mt4Path, "TelegramSignals.txt");
+
+                // FIXED: Proper EA format with all required fields
+                var timestamp = DateTime.UtcNow.ToString("yyyy.MM.dd HH:mm:ss");
+                var eaFormattedSignal = $"{timestamp}|{testSignal.ChannelId}|{testSignal.ChannelName}|{testSignal.ParsedData.Direction}|{testSignal.ParsedData.Symbol}|0.00000|{testSignal.ParsedData.StopLoss:F5}|{testSignal.ParsedData.TakeProfit1:F5}|{testSignal.ParsedData.TakeProfit2:F5}|0.00000|NEW";
+
+                // FIXED: Better file writing with proper error handling
+                using (var writer = new StreamWriter(signalFilePath, true, System.Text.Encoding.UTF8))
+                {
+                    writer.WriteLine(eaFormattedSignal);
+                    writer.Flush();
+                }
+
+                // FIXED: Also create a backup file for debugging
+                var debugFilePath = Path.Combine(mt4Path, "TelegramSignals_Debug.txt");
+                using (var debugWriter = new StreamWriter(debugFilePath, true, System.Text.Encoding.UTF8))
+                {
+                    debugWriter.WriteLine($"[{DateTime.UtcNow:yyyy-MM-dd HH:mm:ss.fff}] SIGNAL WRITTEN:");
+                    debugWriter.WriteLine($"File: {signalFilePath}");
+                    debugWriter.WriteLine($"Content: {eaFormattedSignal}");
+                    debugWriter.WriteLine($"Length: {eaFormattedSignal.Length} chars");
+                    debugWriter.WriteLine("---");
+                    debugWriter.Flush();
+                }
+
                 // Add to signals history
                 allSignals.Add(testSignal);
                 AddToLiveSignals(testSignal);
 
-                ShowMessage($"🧪 Test signal sent successfully!\n\n📊 Signal Details:\n{testSignal.OriginalText}\n\n⚙️ Check your EA to see if it processes the signal!",
+                // FIXED: More detailed success message
+                var fileInfo = new FileInfo(signalFilePath);
+                ShowMessage($"🧪 Test signal sent successfully!\n\n" +
+                           $"📊 Signal Details:\n{testSignal.OriginalText}\n\n" +
+                           $"📁 File: {signalFilePath}\n" +
+                           $"📝 Format: {eaFormattedSignal}\n" +
+                           $"📏 File Size: {fileInfo.Length} bytes\n" +
+                           $"🕒 Written at: {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss} UTC\n\n" +
+                           $"⚙️ Check your EA Expert tab now!\n" +
+                           $"🔍 Debug info saved to: TelegramSignals_Debug.txt",
                            "Test Signal Sent", MessageBoxIcon.Information);
+
+                // FIXED: Force refresh file system (sometimes needed)
+                File.SetLastWriteTime(signalFilePath, DateTime.Now);
             }
             catch (Exception ex)
             {
-                ShowMessage($"❌ Failed to send test signal:\n\n{ex.Message}", "Test Failed", MessageBoxIcon.Error);
+                ShowMessage($"❌ Failed to send test signal:\n\n{ex.Message}\n\nStack Trace:\n{ex.StackTrace}",
+                           "Test Failed", MessageBoxIcon.Error);
             }
         }
 

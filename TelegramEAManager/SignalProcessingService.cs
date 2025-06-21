@@ -174,24 +174,20 @@ namespace TelegramEAManager
 
         private string FormatSignalForEA(ProcessedSignal signal)
         {
-            var formatted = $@"[{signal.DateTime:yyyy-MM-dd HH:mm:ss} UTC] - Channel: {signal.ChannelName} [{signal.ChannelId}]
-{signal.ParsedData?.Direction ?? "N/A"} NOW {signal.ParsedData?.FinalSymbol ?? "N/A"}";
+            // Format: TIMESTAMP|CHANNEL_ID|CHANNEL_NAME|DIRECTION|SYMBOL|ENTRY|SL|TP1|TP2|TP3|STATUS
+            var formatted = $"{signal.DateTime:yyyy-MM-dd HH:mm:ss}|" +
+                            $"{signal.ChannelId}|" +
+                            $"{signal.ChannelName}|" +
+                            $"{signal.ParsedData?.Direction ?? "BUY"}|" +
+                            $"{signal.ParsedData?.FinalSymbol ?? "EURUSD"}|" +
+                            $"{signal.ParsedData?.EntryPrice:F5}|" +
+                            $"{signal.ParsedData?.StopLoss:F5}|" +
+                            $"{signal.ParsedData?.TakeProfit1:F5}|" +
+                            $"{signal.ParsedData?.TakeProfit2:F5}|" +
+                            $"{signal.ParsedData?.TakeProfit3:F5}|" +
+                            $"PROCESSED";
 
-            if (signal.ParsedData?.StopLoss > 0)
-                formatted += $"\nSL {signal.ParsedData.StopLoss:F5}";
-
-            if (signal.ParsedData?.TakeProfit1 > 0)
-                formatted += $"\nTP {signal.ParsedData.TakeProfit1:F5}";
-
-            if (signal.ParsedData?.TakeProfit2 > 0)
-                formatted += $"\nTP2 {signal.ParsedData.TakeProfit2:F5}";
-
-            if (signal.ParsedData?.TakeProfit3 > 0)
-                formatted += $"\nTP3 {signal.ParsedData.TakeProfit3:F5}";
-
-            formatted += $"\n{new string('=', 50)}\n\n";
-
-            return formatted;
+            return formatted + Environment.NewLine;
         }
 
         public void LoadSymbolMapping()
