@@ -10,7 +10,7 @@ namespace TelegramEAManager
     public class EASettings
     {
         public string ChannelIds { get; set; } = "";
-        public string SignalFilePath { get; set; } = "telegram_signals.txt";
+        public string SignalFilePath { get; set; } = "TelegramSignals.txt";
         public string RiskMode { get; set; } = "FIXED_LOT";
         public double FixedLotSize { get; set; } = 0.01;
         public double RiskPercent { get; set; } = 2.0;
