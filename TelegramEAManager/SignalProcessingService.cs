@@ -164,7 +164,18 @@ namespace TelegramEAManager
                 var signalText = FormatSignalForEA(signal);
 
                 // Append to file
-                File.AppendAllText(filePath, signalText);
+                using (var fs = new FileStream(
+        filePath,
+        FileMode.Append,
+        FileAccess.Write,
+        FileShare.ReadWrite,      // <-- EA can read while we write
+        4096,
+        FileOptions.WriteThrough  // <-- bypass OS cache
+        ))
+                using (var sw = new StreamWriter(fs, System.Text.Encoding.UTF8) { AutoFlush = true })
+                {
+                    sw.Write(signalText);        // signalText already ends with \r\n
+                }
             }
             catch (Exception ex)
             {

@@ -507,12 +507,18 @@ void InitializeSymbolFilters()
 //+------------------------------------------------------------------+
 bool TestSignalFileAccess()
 {
-   int fileHandle = FileOpen(SignalFilePath, FILE_READ | FILE_TXT);
+  int fileHandle = FileOpen(
+                    SignalFilePath,
+                    FILE_READ           |   // open for reading
+                    FILE_SHARE_READ     |   // let other readers in
+                    FILE_SHARE_WRITE    |   // let WinForms keep writing
+                    FILE_TXT            |
+                    FILE_ANSI);             // text → ANSI/UTF-8
    
    if(fileHandle == INVALID_HANDLE)
    {
       // Try to create the file
-      fileHandle = FileOpen(SignalFilePath, FILE_WRITE | FILE_TXT);
+      fileHandle = FileOpen(SignalFilePath, FILE_WRITE | FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_TXT | FILE_ANSI);
       if(fileHandle == INVALID_HANDLE)
       {
          Print("❌ Cannot create signal file: ", SignalFilePath);
@@ -541,7 +547,7 @@ void CheckForNewSignals()
    if(!IsTimeToTrade())
       return;
    
-   int fileHandle = FileOpen(SignalFilePath, FILE_READ | FILE_TXT);
+   int fileHandle = FileOpen(SignalFilePath,FILE_READ | FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_TXT  | FILE_ANSI);
    
    if(fileHandle == INVALID_HANDLE)
    {
@@ -557,6 +563,8 @@ void CheckForNewSignals()
    while(!FileIsEnding(fileHandle))
    {
       string line = FileReadString(fileHandle);
+      if(FileIsEnding(fileHandle) && StringLen(line) == 0)
+         break;
       StringTrimLeft(line);
       StringTrimRight(line);
       

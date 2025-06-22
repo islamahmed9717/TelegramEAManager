@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
 using System.Linq;
+using System.Text;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 
@@ -916,11 +917,17 @@ namespace TelegramEAManager
                 var eaFormattedSignal = $"{timestamp}|{testSignal.ChannelId}|{testSignal.ChannelName}|{testSignal.ParsedData.Direction}|{testSignal.ParsedData.Symbol}|0.00000|{testSignal.ParsedData.StopLoss:F5}|{testSignal.ParsedData.TakeProfit1:F5}|{testSignal.ParsedData.TakeProfit2:F5}|0.00000|NEW";
 
                 // FIXED: Better file writing with proper error handling
-                using (var writer = new StreamWriter(signalFilePath, true, System.Text.Encoding.UTF8))
+                using (var fs = new FileStream(signalFilePath,
+                               FileMode.Append,
+                               FileAccess.Write,
+                               FileShare.ReadWrite,
+                               4096,
+                               FileOptions.WriteThrough))
+                using (var writer = new StreamWriter(fs, Encoding.UTF8) { AutoFlush = true })
                 {
                     writer.WriteLine(eaFormattedSignal);
-                    writer.Flush();
                 }
+
 
                 // FIXED: Also create a backup file for debugging
                 var debugFilePath = Path.Combine(mt4Path, "TelegramSignals_Debug.txt");
