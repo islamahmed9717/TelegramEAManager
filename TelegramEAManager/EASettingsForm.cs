@@ -590,7 +590,7 @@ namespace TelegramEAManager
                 var saveDialog = new SaveFileDialog
                 {
                     Filter = "MT4/MT5 Set files (*.set)|*.set|All files (*.*)|*.*",
-                    FileName = $"TelegramEA_islamahmed9717_{DateTime.UtcNow:yyyyMMdd_HHmmss}.set"
+                    FileName = $"TelegramEA_islamahmed9717_{DateTime.Now:yyyyMMdd_HHmmss}.set"
                 };
 
                 if (saveDialog.ShowDialog() == DialogResult.OK)

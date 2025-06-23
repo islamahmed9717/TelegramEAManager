@@ -70,7 +70,7 @@ namespace TelegramEAManager
             var lblStats = new Label
             {
                 Name = "lblHeaderStats",
-                Text = $"Total Signals: {allSignals.Count} | Today: {allSignals.Count(s => s.DateTime.Date == DateTime.UtcNow.Date)} | Success Rate: {CalculateSuccessRate():F1}%",
+                Text = $"Total Signals: {allSignals.Count} | Today: {allSignals.Count(s => s.DateTime.Date == DateTime.Now.Date)} | Success Rate: {CalculateSuccessRate():F1}%",
                 Location = new Point(700, 25),
                 Size = new Size(450, 25),
                 ForeColor = Color.White,
@@ -451,7 +451,7 @@ namespace TelegramEAManager
             lblTopChannel.Text = topChannel != null ? $"Top Channel: {topChannel.Key} ({topChannel.Count()})" : "Top Channel: N/A";
             lblTopSymbol.Text = topSymbol != null ? $"Top Symbol: {topSymbol.Key} ({topSymbol.Count()})" : "Top Symbol: N/A";
             lblLastSignal.Text = lastSignal != null ? $"Last Signal: {lastSignal.DateTime:HH:mm:ss}" : "Last Signal: N/A";
-            lblHeaderStats.Text = $"Total: {allSignals.Count} | Today: {allSignals.Count(s => s.DateTime.Date == DateTime.UtcNow.Date)} | Success: {CalculateSuccessRate():F1}%";
+            lblHeaderStats.Text = $"Total: {allSignals.Count} | Today: {allSignals.Count(s => s.DateTime.Date == DateTime.Now.Date)} | Success: {CalculateSuccessRate():F1}%";
         }
 
         private double CalculateSuccessRate()
@@ -474,23 +474,23 @@ namespace TelegramEAManager
             switch (timeFilter)
             {
                 case "Today":
-                    filteredSignals = filteredSignals.Where(s => s.DateTime.Date == DateTime.UtcNow.Date).ToList();
+                    filteredSignals = filteredSignals.Where(s => s.DateTime.Date == DateTime.Now.Date).ToList();
                     break;
                 case "Yesterday":
-                    filteredSignals = filteredSignals.Where(s => s.DateTime.Date == DateTime.UtcNow.Date.AddDays(-1)).ToList();
+                    filteredSignals = filteredSignals.Where(s => s.DateTime.Date == DateTime.Now.Date.AddDays(-1)).ToList();
                     break;
                 case "This Week":
-                    var startOfWeek = DateTime.UtcNow.AddDays(-(int)DateTime.UtcNow.DayOfWeek);
+                    var startOfWeek = DateTime.Now.AddDays(-(int)DateTime.Now.DayOfWeek);
                     filteredSignals = filteredSignals.Where(s => s.DateTime >= startOfWeek).ToList();
                     break;
                 case "This Month":
-                    filteredSignals = filteredSignals.Where(s => s.DateTime.Month == DateTime.UtcNow.Month && s.DateTime.Year == DateTime.UtcNow.Year).ToList();
+                    filteredSignals = filteredSignals.Where(s => s.DateTime.Month == DateTime.Now.Month && s.DateTime.Year == DateTime.Now.Year).ToList();
                     break;
                 case "Last 7 Days":
-                    filteredSignals = filteredSignals.Where(s => s.DateTime >= DateTime.UtcNow.AddDays(-7)).ToList();
+                    filteredSignals = filteredSignals.Where(s => s.DateTime >= DateTime.Now.AddDays(-7)).ToList();
                     break;
                 case "Last 30 Days":
-                    filteredSignals = filteredSignals.Where(s => s.DateTime >= DateTime.UtcNow.AddDays(-30)).ToList();
+                    filteredSignals = filteredSignals.Where(s => s.DateTime >= DateTime.Now.AddDays(-30)).ToList();
                     break;
             }
 
@@ -818,9 +818,9 @@ namespace TelegramEAManager
                           $"Error Rate: {(filteredSignals.Count > 0 ? (double)filteredSignals.Count(s => s.Status.Contains("Error")) / filteredSignals.Count * 100 : 0):F2}%\n\n" +
                           "📅 TIME ANALYSIS:\n" +
                           new string('=', 20) + "\n" +
-                          $"Today's Signals: {allSignals.Count(s => s.DateTime.Date == DateTime.UtcNow.Date)}\n" +
-                          $"This Week's Signals: {allSignals.Count(s => s.DateTime >= DateTime.UtcNow.AddDays(-7))}\n" +
-                          $"This Month's Signals: {allSignals.Count(s => s.DateTime.Month == DateTime.UtcNow.Month)}\n" +
+                          $"Today's Signals: {allSignals.Count(s => s.DateTime.Date == DateTime.Now.Date)}\n" +
+                          $"This Week's Signals: {allSignals.Count(s => s.DateTime >= DateTime.Now.AddDays(-7))}\n" +
+                          $"This Month's Signals: {allSignals.Count(s => s.DateTime.Month == DateTime.Now.Month)}\n" +
                           $"Average Signals per Day: {(allSignals.Count > 0 && allSignals.Max(s => s.DateTime) != allSignals.Min(s => s.DateTime) ? allSignals.Count / Math.Max(1, (allSignals.Max(s => s.DateTime) - allSignals.Min(s => s.DateTime)).Days) : 0):F1}\n\n" +
                           "📢 CHANNEL PERFORMANCE:\n" +
                           new string('=', 30) + "\n" +
@@ -1012,7 +1012,7 @@ namespace TelegramEAManager
             if (errorRate > 10)
                 recommendations.Add("• High error rate detected - review symbol mapping and broker configuration");
 
-            var signalVolume = allSignals.Count(s => s.DateTime.Date == DateTime.UtcNow.Date);
+            var signalVolume = allSignals.Count(s => s.DateTime.Date == DateTime.Now.Date);
             if (signalVolume < 5)
                 recommendations.Add("• Low signal volume today - consider adding more active channels");
 

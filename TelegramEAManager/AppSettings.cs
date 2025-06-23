@@ -12,7 +12,7 @@ namespace TelegramEAManager
         public List<string> SavedAccounts { get; set; } = new List<string>();
         public string LastPhoneNumber { get; set; } = "";
         public string MT4Path { get; set; } = "";
-        public DateTime LastUsed { get; set; } = DateTime.UtcNow;
+        public DateTime LastUsed { get; set; } = DateTime.Now;
     }
 
 }

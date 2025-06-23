@@ -70,7 +70,7 @@ namespace TelegramEAManager
 
             var lblDescription = new Label
             {
-                Text = $"Configure symbol mappings for your broker | Current Time: {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss} UTC | User: islamahmed9717",
+                Text = $"Configure symbol mappings for your broker | Current Time: {DateTime.Now:yyyy-MM-dd HH:mm:ss} UTC | User: islamahmed9717",
                 Location = new Point(20, 45),
                 Size = new Size(800, 20),
                 Font = new Font("Segoe UI", 9F),
@@ -525,7 +525,7 @@ namespace TelegramEAManager
 
                 var resultText = string.Join("\n", results);
 
-                MessageBox.Show($"🧪 Symbol Mapping Test Results:\n\n{resultText}\n\nTime: {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss} UTC",
+                MessageBox.Show($"🧪 Symbol Mapping Test Results:\n\n{resultText}\n\nTime: {DateTime.Now:yyyy-MM-dd HH:mm:ss} UTC",
                               "Test Results", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
             catch (Exception ex)
@@ -578,7 +578,7 @@ namespace TelegramEAManager
                 var saveDialog = new SaveFileDialog
                 {
                     Filter = "Text files (*.txt)|*.txt|All files (*.*)|*.*",
-                    FileName = $"SymbolMapping_islamahmed9717_{DateTime.UtcNow:yyyyMMdd_HHmmss}.txt"
+                    FileName = $"SymbolMapping_islamahmed9717_{DateTime.Now:yyyyMMdd_HHmmss}.txt"
                 };
 
                 if (saveDialog.ShowDialog() == DialogResult.OK)

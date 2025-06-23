@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -35,7 +36,85 @@ namespace TelegramEAManager
         {
             telegramService = new TelegramService();
             signalProcessor = new SignalProcessingService();
+
+            // Subscribe to real-time message events
+            telegramService.NewMessageReceived += TelegramService_NewMessageReceived;
+            telegramService.ErrorOccurred += TelegramService_ErrorOccurred;
+
+            // Subscribe to signal processing events
+            signalProcessor.SignalProcessed += SignalProcessor_SignalProcessed;
+            signalProcessor.ErrorOccurred += SignalProcessor_ErrorOccurred;
         }
+
+        private void TelegramService_NewMessageReceived(object? sender, (string message, long channelId, string channelName) e)
+        {
+            try
+            {
+                // Process the message in the signal processor
+                var processedSignal = signalProcessor.ProcessTelegramMessage(e.message, e.channelId, e.channelName);
+
+                // Update UI on main thread
+                if (this.InvokeRequired)
+                {
+                    this.Invoke(new Action(() => {
+                        AddToLiveSignals(processedSignal);
+                        allSignals.Add(processedSignal);
+                        LogMessage($"📨 New message from {e.channelName}: {processedSignal.Status}");
+                    }));
+                }
+                else
+                {
+                    AddToLiveSignals(processedSignal);
+                    allSignals.Add(processedSignal);
+                    LogMessage($"📨 New message from {e.channelName}: {processedSignal.Status}");
+                }
+            }
+            catch (Exception ex)
+            {
+                LogMessage($"❌ Error processing message: {ex.Message}");
+            }
+        }
+
+        private void TelegramService_ErrorOccurred(object? sender, string e)
+        {
+            if (this.InvokeRequired)
+            {
+                this.Invoke(new Action(() => LogMessage($"🔴 Telegram Error: {e}")));
+            }
+            else
+            {
+                LogMessage($"🔴 Telegram Error: {e}");
+            }
+        }
+
+        private void SignalProcessor_SignalProcessed(object? sender, ProcessedSignal e)
+        {
+            if (this.InvokeRequired)
+            {
+                this.Invoke(new Action(() => {
+                    LogMessage($"✅ Signal processed: {e.ParsedData?.Symbol} {e.ParsedData?.Direction} - {e.Status}");
+                    ShowNotification($"📊 New Signal: {e.ParsedData?.Symbol} {e.ParsedData?.Direction}");
+                }));
+            }
+            else
+            {
+                LogMessage($"✅ Signal processed: {e.ParsedData?.Symbol} {e.ParsedData?.Direction} - {e.Status}");
+                ShowNotification($"📊 New Signal: {e.ParsedData?.Symbol} {e.ParsedData?.Direction}");
+            }
+        }
+
+        private void SignalProcessor_ErrorOccurred(object? sender, string e)
+        {
+            if (this.InvokeRequired)
+            {
+                this.Invoke(new Action(() => LogMessage($"🔴 Signal Processing Error: {e}")));
+            }
+            else
+            {
+                LogMessage($"🔴 Signal Processing Error: {e}");
+            }
+        }
+
 
         private void SetupTimers()
         {
@@ -84,7 +163,7 @@ namespace TelegramEAManager
             var lblSubtitle = new Label
             {
                 Name = "lblSubtitle",
-                Text = $"🕒 Current Time (UTC): 2025-06-21 15:23:07 | User: islamahmed9717",
+                Text = $"🕒 Current Now (UTC): 2025-06-21 15:23:07 | User: islamahmed9717",
                 Location = new Point(20, 28),
                 Size = new Size(500, 15),
                 ForeColor = Color.FromArgb(200, 220, 255),
@@ -517,7 +596,7 @@ namespace TelegramEAManager
                 BackColor = Color.White
             };
 
-            lvLiveSignals.Columns.Add("Time", 60);
+            lvLiveSignals.Columns.Add("Now", 60);
             lvLiveSignals.Columns.Add("Channel", 100);
             lvLiveSignals.Columns.Add("Symbol", 60);
             lvLiveSignals.Columns.Add("Direction", 50);
@@ -616,7 +695,7 @@ namespace TelegramEAManager
             var statusLabel = new ToolStripStatusLabel
             {
                 Name = "statusLabel",
-                Text = $"Ready - Current UTC Time: {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss}",
+                Text = $"Ready - Current UTC Now: {DateTime.Now:yyyy-MM-dd HH:mm:ss}",
                 Font = new Font("Segoe UI", 9F),
                 Spring = true,
                 TextAlign = ContentAlignment.MiddleLeft
@@ -671,7 +750,7 @@ namespace TelegramEAManager
                 {
                     await LoadChannelsAfterAuth(phoneNumber);
                     ShowMessage("✅ Successfully connected to Telegram!\n\n📱 Phone: " + phoneNumber +
-                               "\n🕒 Time: " + DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss") + " UTC" +
+                               "\n🕒 Now: " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + " UTC" +
                                "\n👤 User: islamahmed9717",
                                "Connection Successful", MessageBoxIcon.Information);
                 }
@@ -682,7 +761,7 @@ namespace TelegramEAManager
             }
             catch (Exception ex)
             {
-                ShowMessage($"❌ Connection failed:\n\n{ex.Message}\n\n🕒 Time: {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss} UTC\n👤 User: islamahmed9717",
+                ShowMessage($"❌ Connection failed:\n\n{ex.Message}\n\n🕒 Now: {DateTime.Now:yyyy-MM-dd HH:mm:ss} UTC\n👤 User: islamahmed9717",
                            "Connection Error", MessageBoxIcon.Error);
                 UpdateStatus(false, false);
             }
@@ -713,11 +792,60 @@ namespace TelegramEAManager
                 SavePhoneNumber(phoneNumber);
 
                 // Log the successful connection
-                LogMessage($"✅ Connected successfully - Phone: {phoneNumber}, Time: {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss} UTC, User: islamahmed9717");
+                LogMessage($"✅ Connected successfully - Phone: {phoneNumber}, Channels: {channels.Count}, Time: {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss} UTC, User: islamahmed9717");
+
+                ShowMessage($"✅ Successfully connected to Telegram!\n\n" +
+                           $"📱 Phone: {phoneNumber}\n" +
+                           $"📢 Found {channels.Count} channels\n" +
+                           $"🕒 Time: {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss} UTC\n" +
+                           $"👤 User: islamahmed9717\n\n" +
+                           $"🎯 Select channels and start monitoring!",
+                           "Connection Successful", MessageBoxIcon.Information);
             }
             catch (Exception ex)
             {
                 ShowMessage($"❌ Failed to load channels:\n\n{ex.Message}", "Channel Loading Error", MessageBoxIcon.Error);
+            }
+        }
+
+        private void ShowNotification(string message)
+        {
+            try
+            {
+                // Create a simple notification (you can enhance this)
+                var notificationForm = new Form
+                {
+                    Size = new Size(300, 100),
+                    StartPosition = FormStartPosition.Manual,
+                    FormBorderStyle = FormBorderStyle.None,
+                    BackColor = Color.FromArgb(34, 197, 94),
+                    TopMost = true,
+                    ShowInTaskbar = false
+                };
+
+                var lblMessage = new Label
+                {
+                    Text = message,
+                    Dock = DockStyle.Fill,
+                    TextAlign = ContentAlignment.MiddleCenter,
+                    ForeColor = Color.White,
+                    Font = new Font("Segoe UI", 10F, FontStyle.Bold)
+                };
+                notificationForm.Controls.Add(lblMessage);
+
+                notificationForm.Show();
+
+                // Auto-close after 3 seconds
+                var timer = new System.Windows.Forms.Timer { Interval = 3000 };
+                timer.Tick += (s, e) => {
+                    timer.Stop();
+                    notificationForm.Close();
+                };
+                timer.Start();
+            }
+            catch
+            {
+                // Ignore notification errors
             }
         }
 
@@ -815,7 +943,16 @@ namespace TelegramEAManager
 
             try
             {
-                // Start monitoring
+                // Update EA settings with current MT4 path
+                var currentSettings = signalProcessor.GetEASettings();
+                currentSettings.MT4FilesPath = mt4Path;
+                currentSettings.SignalFilePath = "telegram_signals.txt"; // FIXED: Use correct filename
+                signalProcessor.UpdateEASettings(currentSettings);
+
+                // Start real Telegram monitoring
+                telegramService.StartMonitoring(selectedChannels);
+
+                // Update state
                 isMonitoring = true;
 
                 // Update UI
@@ -827,7 +964,11 @@ namespace TelegramEAManager
                 UpdateStatus(true, true);
                 UpdateSelectedChannelsStatus("📊 Live");
 
-                ShowMessage($"✅ Monitoring started successfully!\n\n📊 Monitoring {selectedChannels.Count} channels\n📁 Signals saved to: {mt4Path}\\TelegramSignals.txt\n\n⚠️ Keep this application running to receive signals!",
+                ShowMessage($"✅ Monitoring started successfully!\n\n" +
+                           $"📊 Monitoring {selectedChannels.Count} channels\n" +
+                           $"📁 Signals saved to: {mt4Path}\\telegram_signals.txt\n" +
+                           $"🔄 Real-time message processing active\n\n" +
+                           $"⚠️ Keep this application running to receive signals!",
                            "Monitoring Started", MessageBoxIcon.Information);
             }
             catch (Exception ex)
@@ -840,6 +981,9 @@ namespace TelegramEAManager
         {
             try
             {
+                // Stop Telegram monitoring
+                telegramService.StopMonitoring();
+
                 isMonitoring = false;
 
                 // Update UI
@@ -859,6 +1003,7 @@ namespace TelegramEAManager
             }
         }
 
+
         private void BtnCopyChannelIDs_Click(object? sender, EventArgs e)
         {
             if (selectedChannels.Count == 0)
@@ -868,7 +1013,14 @@ namespace TelegramEAManager
             }
 
             var channelIds = string.Join(",", selectedChannels.Select(c => c.Id.ToString()));
-            Clipboard.SetText(channelIds);
+            try
+            {
+                Clipboard.SetText(channelIds);
+            }
+            catch (ExternalException)
+            {
+                ShowMessage("⚠️ Unable to copy to clipboard. Please try again.", "Clipboard Error", MessageBoxIcon.Error);
+            }
 
             var channelList = string.Join("\n", selectedChannels.Select(c => $"• {c.Title} ({c.Id}) - {c.Type}"));
 
@@ -889,84 +1041,60 @@ namespace TelegramEAManager
 
             try
             {
-                var testSignal = new ProcessedSignal
-                {
-                    Id = Guid.NewGuid().ToString(),
-                    DateTime = DateTime.UtcNow,
-                    ChannelId = 999999,
-                    ChannelName = "TEST_CHANNEL",
-                    OriginalText = "BUY NOW EURUSD\nSL 1.0850\nTP 1.0920\nTP2 1.0950",
-                    Status = "Test Signal",
-                    ParsedData = new ParsedSignalData
-                    {
-                        Symbol = "EURUSD",
-                        Direction = "BUY",
-                        OriginalSymbol = "EURUSD",
-                        FinalSymbol = "EURUSD",
-                        StopLoss = 1.0850,
-                        TakeProfit1 = 1.0920,
-                        TakeProfit2 = 1.0950
-                    }
-                };
+                // Create test message that will be parsed by the signal processor
+                var testMessage = @"🚀 TRADING SIGNAL 🚀
 
-                // FIXED: Correct filename (case-sensitive)
-                var signalFilePath = Path.Combine(mt4Path, "TelegramSignals.txt");
+BUY EURUSD NOW
 
-                // FIXED: Proper EA format with all required fields
-                var timestamp = DateTime.UtcNow.ToString("yyyy.MM.dd HH:mm:ss");
-                var eaFormattedSignal = $"{timestamp}|{testSignal.ChannelId}|{testSignal.ChannelName}|{testSignal.ParsedData.Direction}|{testSignal.ParsedData.Symbol}|0.00000|{testSignal.ParsedData.StopLoss:F5}|{testSignal.ParsedData.TakeProfit1:F5}|{testSignal.ParsedData.TakeProfit2:F5}|0.00000|NEW";
+📊 Entry: Market Price
+🛑 SL: 1.0850
+🎯 TP1: 1.0920
+🎯 TP2: 1.0950
+🎯 TP3: 1.0980
 
-                // FIXED: Better file writing with proper error handling
-                using (var fs = new FileStream(signalFilePath,
-                               FileMode.Append,
-                               FileAccess.Write,
-                               FileShare.ReadWrite,
-                               4096,
-                               FileOptions.WriteThrough))
-                using (var writer = new StreamWriter(fs, Encoding.UTF8) { AutoFlush = true })
-                {
-                    writer.WriteLine(eaFormattedSignal);
-                }
+Good luck traders! 💰";
 
+                // Process the test message through the real signal processor
+                var processedSignal = signalProcessor.ProcessTelegramMessage(testMessage, 999999, "TEST_CHANNEL");
 
-                // FIXED: Also create a backup file for debugging
-                var debugFilePath = Path.Combine(mt4Path, "TelegramSignals_Debug.txt");
-                using (var debugWriter = new StreamWriter(debugFilePath, true, System.Text.Encoding.UTF8))
-                {
-                    debugWriter.WriteLine($"[{DateTime.UtcNow:yyyy-MM-dd HH:mm:ss.fff}] SIGNAL WRITTEN:");
-                    debugWriter.WriteLine($"File: {signalFilePath}");
-                    debugWriter.WriteLine($"Content: {eaFormattedSignal}");
-                    debugWriter.WriteLine($"Length: {eaFormattedSignal.Length} chars");
-                    debugWriter.WriteLine("---");
-                    debugWriter.Flush();
-                }
+                // Add to signals history and UI
+                allSignals.Add(processedSignal);
+                AddToLiveSignals(processedSignal);
 
-                // Add to signals history
-                allSignals.Add(testSignal);
-                AddToLiveSignals(testSignal);
-
-                // FIXED: More detailed success message
+                var signalFilePath = Path.Combine(mt4Path, "telegram_signals.txt");
                 var fileInfo = new FileInfo(signalFilePath);
-                ShowMessage($"🧪 Test signal sent successfully!\n\n" +
-                           $"📊 Signal Details:\n{testSignal.OriginalText}\n\n" +
-                           $"📁 File: {signalFilePath}\n" +
-                           $"📝 Format: {eaFormattedSignal}\n" +
-                           $"📏 File Size: {fileInfo.Length} bytes\n" +
-                           $"🕒 Written at: {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss} UTC\n\n" +
-                           $"⚙️ Check your EA Expert tab now!\n" +
-                           $"🔍 Debug info saved to: TelegramSignals_Debug.txt",
-                           "Test Signal Sent", MessageBoxIcon.Information);
 
-                // FIXED: Force refresh file system (sometimes needed)
-                File.SetLastWriteTime(signalFilePath, DateTime.Now);
+                ShowMessage($"🧪 Test signal processed successfully!\n\n" +
+                           $"📊 Signal Details:\n{testMessage}\n\n" +
+                           $"📁 File: {signalFilePath}\n" +
+                           $"📝 Status: {processedSignal.Status}\n" +
+                           $"📏 File Size: {(fileInfo.Exists ? fileInfo.Length : 0)} bytes\n" +
+                           $"🕒 Processed at: {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss} UTC\n\n" +
+                           $"⚙️ Check your EA Expert tab now!\n" +
+                           $"👤 User: islamahmed9717",
+                           "Test Signal Processed", MessageBoxIcon.Information);
             }
             catch (Exception ex)
             {
-                ShowMessage($"❌ Failed to send test signal:\n\n{ex.Message}\n\nStack Trace:\n{ex.StackTrace}",
+                ShowMessage($"❌ Failed to process test signal:\n\n{ex.Message}\n\nStack Trace:\n{ex.StackTrace}",
                            "Test Failed", MessageBoxIcon.Error);
             }
         }
 
+        protected override void OnFormClosing(FormClosingEventArgs e)
+        {
+            try
+            {
+                uiUpdateTimer?.Stop();
+                telegramService?.StopMonitoring();
+                telegramService?.Dispose();
+            }
+            catch
+            {
+                // Ignore cleanup errors
+            }
+            base.OnFormClosing(e);
+        }
         private void BtnGenerateEAConfig_Click(object? sender, EventArgs e)
         {
             if (selectedChannels.Count == 0)
@@ -982,7 +1110,7 @@ namespace TelegramEAManager
                 var saveDialog = new SaveFileDialog
                 {
                     Filter = "Text files (*.txt)|*.txt|All files (*.*)|*.*",
-                    FileName = $"TelegramEA_Config_islamahmed9717_{DateTime.UtcNow:yyyyMMdd_HHmmss}.txt",
+                    FileName = $"TelegramEA_Config_islamahmed9717_{DateTime.Now:yyyyMMdd_HHmmss}.txt",
                     Title = "Save EA Configuration"
                 };
 
@@ -1087,7 +1215,7 @@ namespace TelegramEAManager
             var lblSubtitle = this.Controls.Find("lblSubtitle", true).FirstOrDefault() as Label;
             if (lblSubtitle != null)
             {
-                lblSubtitle.Text = $"🕒 Current Time (UTC): {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss} | User: islamahmed9717";
+                lblSubtitle.Text = $"🕒 Current Now (UTC): {DateTime.Now:yyyy-MM-dd HH:mm:ss} | User: islamahmed9717";
             }
 
             // Update time in status bar
@@ -1099,7 +1227,8 @@ namespace TelegramEAManager
                     {
                         if (item.Name == "statusLabel")
                         {
-                            item.Text = $"Real-time System Active | UTC: {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss} | User: islamahmed9717";
+                            item.Text = $"Real-time System Active | UTC: {DateTime.Now:yyyy-MM-dd HH:mm:ss} | User: islamahmed9717";
+
                         }
                     }
                 }
@@ -1271,7 +1400,7 @@ namespace TelegramEAManager
 
         private void UpdateSignalsCount()
         {
-            var todaySignals = allSignals.Count(s => s.DateTime.Date == DateTime.UtcNow.Date);
+            var todaySignals = allSignals.Count(s => s.DateTime.Date == DateTime.Now.Date);
 
             var lblSignalsCount = this.Controls.Find("lblSignalsCount", true)[0] as Label;
             if (lblSignalsCount != null)
@@ -1292,7 +1421,7 @@ namespace TelegramEAManager
 
             return $@"//+------------------------------------------------------------------+
 //|                    Telegram EA Configuration                     |
-//|                Generated: {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss} UTC               |
+//|                Generated: {DateTime.Now:yyyy-MM-dd HH:mm:ss} UTC               |
 //|                User: islamahmed9717                              |
 //+------------------------------------------------------------------+
 
@@ -1336,7 +1465,7 @@ MaxRetriesOrderSend = 3
 4. The EA will automatically read signals from: TelegramSignals.txt
 5. Start monitoring in this app before running the EA
 
-Generated on: {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss} UTC
+Generated on: {DateTime.Now:yyyy-MM-dd HH:mm:ss} UTC
 By: islamahmed9717 - Telegram EA Manager v2.0 (Real Implementation)
 System: Windows Forms .NET 9.0 with WTelegramClient
 */";
@@ -1445,7 +1574,7 @@ System: Windows Forms .NET 9.0 with WTelegramClient
         private void LogMessage(string message)
         {
             // Add logging functionality if needed
-            Console.WriteLine($"[{DateTime.UtcNow:yyyy-MM-dd HH:mm:ss}] {message}");
+            Console.WriteLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {message}");
         }
 
         private void SavePhoneNumber(string phoneNumber)
@@ -1516,19 +1645,6 @@ System: Windows Forms .NET 9.0 with WTelegramClient
             }
         }
 
-        protected override void OnFormClosing(FormClosingEventArgs e)
-        {
-            try
-            {
-                uiUpdateTimer?.Stop();
-                telegramService?.Dispose();
-            }
-            catch
-            {
-                // Ignore cleanup errors
-            }
-            base.OnFormClosing(e);
-        }
         #endregion
     }
 }

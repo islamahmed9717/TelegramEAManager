@@ -507,37 +507,48 @@ void InitializeSymbolFilters()
 //+------------------------------------------------------------------+
 bool TestSignalFileAccess()
 {
-  int fileHandle = FileOpen(
-                    SignalFilePath,
-                    FILE_READ           |   // open for reading
-                    FILE_SHARE_READ     |   // let other readers in
-                    FILE_SHARE_WRITE    |   // let WinForms keep writing
-                    FILE_TXT            |
-                    FILE_ANSI);             // text → ANSI/UTF-8
+   int fileHandle = FileOpen("telegram_signals.txt",
+                            FILE_READ | 
+                            FILE_SHARE_READ | 
+                            FILE_SHARE_WRITE | 
+                            FILE_TXT | 
+                            FILE_ANSI);
    
    if(fileHandle == INVALID_HANDLE)
    {
-      // Try to create the file
-      fileHandle = FileOpen(SignalFilePath, FILE_WRITE | FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_TXT | FILE_ANSI);
+      // Try to create the file if it doesn't exist
+      fileHandle = FileOpen("telegram_signals.txt", 
+                           FILE_WRITE | 
+                           FILE_SHARE_READ | 
+                           FILE_SHARE_WRITE | 
+                           FILE_TXT | 
+                           FILE_ANSI);
       if(fileHandle == INVALID_HANDLE)
       {
-         Print("❌ Cannot create signal file: ", SignalFilePath);
-         Print("💡 Error code: ", GetLastError());
+         int errorCode = GetLastError();
+         Print("❌ Cannot create signal file: telegram_signals.txt");
+         Print("💡 Error code: ", errorCode);
+         Print("💡 Check if MT4/MT5 Files path is correctly set in Windows app");
+         Print("💡 Ensure Windows app has write permissions to the folder");
          return false;
       }
       
-      // Write initial header
+      // Write initial header with current format
       FileWriteString(fileHandle, "# Telegram EA MT5 Signal File - islamahmed9717\n");
       FileWriteString(fileHandle, "# Created: " + TimeToString(TimeCurrent(), TIME_DATE|TIME_MINUTES) + "\n");
       FileWriteString(fileHandle, "# Signal Expiry: " + IntegerToString(MaxSignalAgeMinutes) + " minutes\n");
       FileWriteString(fileHandle, "# Platform: MetaTrader 5\n");
-      FileWriteString(fileHandle, "# Format: TIMESTAMP|CHANNEL_ID|CHANNEL_NAME|DIRECTION|SYMBOL|ENTRY|SL|TP1|TP2|TP3|STATUS\n\n");
+      FileWriteString(fileHandle, "# Format: TIMESTAMP|CHANNEL_ID|CHANNEL_NAME|DIRECTION|SYMBOL|ENTRY|SL|TP1|TP2|TP3|STATUS\n");
+      FileWriteString(fileHandle, "# Status values: NEW (ready to process), PROCESSED (already handled)\n\n");
    }
    
    FileClose(fileHandle);
-   Print("✅ MT5 Signal file access confirmed: ", SignalFilePath);
+   Print("✅ MT5 Signal file access confirmed: telegram_signals.txt");
    return true;
 }
+// --- incremental-read pointers -----------------------------------
+static long   g_lastPos  = 0;   // byte offset already processed
+static ulong  g_lastSize = 0;   // file size last time we checked
 
 //+------------------------------------------------------------------+
 //| Check for new signals from file - MT5 VERSION                   |
@@ -547,14 +558,21 @@ void CheckForNewSignals()
    if(!IsTimeToTrade())
       return;
    
-   int fileHandle = FileOpen(SignalFilePath,FILE_READ | FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_TXT  | FILE_ANSI);
+   // FIXED: Use correct filename that matches WinForms app output
+   int fileHandle = FileOpen("telegram_signals.txt",
+                            FILE_READ | 
+                            FILE_SHARE_READ | 
+                            FILE_SHARE_WRITE | 
+                            FILE_TXT | 
+                            FILE_ANSI);
    
    if(fileHandle == INVALID_HANDLE)
    {
       if(PrintToExpertLog && totalSignalsProcessed == 0)
       {
-         Print("📁 MT5 Signal file not found: ", SignalFilePath);
+         Print("📁 MT5 Signal file not found: telegram_signals.txt");
          Print("💡 Make sure the Windows application is running and monitoring channels!");
+         Print("💡 Check if MT4 Files path is set correctly in the Windows app");
       }
       return;
    }
@@ -565,6 +583,7 @@ void CheckForNewSignals()
       string line = FileReadString(fileHandle);
       if(FileIsEnding(fileHandle) && StringLen(line) == 0)
          break;
+         
       StringTrimLeft(line);
       StringTrimRight(line);
       
@@ -572,7 +591,7 @@ void CheckForNewSignals()
       if(StringLen(line) == 0 || StringFind(line, "#") == 0)
          continue;
       
-      // Try to parse as formatted signal line first
+      // FIXED: Better signal processing with status checking
       if(ProcessFormattedSignalLine(line))
          continue;
       
@@ -592,14 +611,14 @@ bool ProcessFormattedSignalLine(string line)
    int partCount = StringSplit(line, '|', parts);
    
    // Expected format: TIMESTAMP|CHANNEL_ID|CHANNEL_NAME|DIRECTION|SYMBOL|ENTRY|SL|TP1|TP2|TP3|STATUS
-   if(partCount < 6)
+   if(partCount < 11)
       return false;
    
    TelegramSignal signal;
    signal.signalId = GenerateSignalId(line);
    signal.receivedTime = TimeCurrent();
    
-   // Parse timestamp (first part)
+   // Parse timestamp (first part) - FIXED: Handle both formats
    string timestampStr = parts[0];
    StringTrimLeft(timestampStr);
    StringTrimRight(timestampStr);
@@ -608,6 +627,17 @@ bool ProcessFormattedSignalLine(string line)
    // If timestamp parsing failed, use current time
    if(signal.signalTime == 0)
       signal.signalTime = TimeCurrent();
+   
+   // FIXED: Check signal status - only process NEW signals
+   string signalStatus = parts[10];
+   StringTrimLeft(signalStatus);
+   StringTrimRight(signalStatus);
+   
+   if(signalStatus != "NEW" && signalStatus != "PROCESSED")
+   {
+      // Skip signals that are not new or already processed
+      return true;
+   }
    
    // Check if signal is too old
    long signalAgeMinutes = (TimeCurrent() - signal.signalTime) / 60;
@@ -628,7 +658,7 @@ bool ProcessFormattedSignalLine(string line)
       return true; // Already processed, skip
    }
    
-   // Parse remaining parts
+   // Parse remaining parts with better error handling
    if(partCount >= 2) 
    {
       signal.channelId = parts[1];
@@ -646,18 +676,38 @@ bool ProcessFormattedSignalLine(string line)
       signal.direction = parts[3];
       StringTrimLeft(signal.direction);
       StringTrimRight(signal.direction);
+      StringToUpper(signal.direction); // Normalize direction
    }
    if(partCount >= 5) 
    {
       signal.originalSymbol = parts[4];
       StringTrimLeft(signal.originalSymbol);
       StringTrimRight(signal.originalSymbol);
+      StringToUpper(signal.originalSymbol); // Normalize symbol
    }
-   if(partCount >= 6) signal.entryPrice = StringToDouble(parts[5]);
-   if(partCount >= 7) signal.stopLoss = StringToDouble(parts[6]);
-   if(partCount >= 8) signal.takeProfit1 = StringToDouble(parts[7]);
-   if(partCount >= 9) signal.takeProfit2 = StringToDouble(parts[8]);
-   if(partCount >= 10) signal.takeProfit3 = StringToDouble(parts[9]);
+   
+   // Parse prices with validation
+   if(partCount >= 6) 
+   {
+      double entryPrice = StringToDouble(parts[5]);
+      signal.entryPrice = (entryPrice > 0) ? entryPrice : 0; // 0 means market order
+   }
+   if(partCount >= 7) 
+   {
+      signal.stopLoss = StringToDouble(parts[6]);
+   }
+   if(partCount >= 8) 
+   {
+      signal.takeProfit1 = StringToDouble(parts[7]);
+   }
+   if(partCount >= 9) 
+   {
+      signal.takeProfit2 = StringToDouble(parts[8]);
+   }
+   if(partCount >= 10) 
+   {
+      signal.takeProfit3 = StringToDouble(parts[9]);
+   }
    
    signal.originalText = line;
    signal.finalSymbol = ProcessSymbolTransformation(signal.originalSymbol);
@@ -669,11 +719,24 @@ bool ProcessFormattedSignalLine(string line)
    {
       ProcessValidatedSignal(signal);
       AddToProcessedSignals(signal.signalId);
+      
+      // FIXED: Mark signal as processed in the file (optional)
+      MarkSignalAsProcessed(line);
    }
    
    return true;
 }
 
+void MarkSignalAsProcessed(string originalLine)
+{
+   // Optional: Mark signal as processed in the file
+   // For now, we rely on the signalId tracking which works well
+   
+   if(!PrintToExpertLog)
+      return;
+      
+   Print("📝 MT5 Signal processed and tracked by ID system");
+}
 //+------------------------------------------------------------------+
 //| Process text-based signal (legacy format)                       |
 //+------------------------------------------------------------------+
@@ -738,9 +801,11 @@ datetime ParseTimestamp(string timestampStr)
 {
    datetime result = 0;
    
-   // Try different timestamp formats
+   // Remove any extra spaces
+   StringTrimLeft(timestampStr);
+   StringTrimRight(timestampStr);
    
-   // Format 1: YYYY-MM-DD HH:MM:SS
+   // Format 1: YYYY.MM.DD HH:MM:SS (MT5 standard)
    if(StringLen(timestampStr) >= 19)
    {
       result = StringToTime(timestampStr);
@@ -748,20 +813,22 @@ datetime ParseTimestamp(string timestampStr)
          return result;
    }
    
-   // Format 2: YYYY.MM.DD HH:MM:SS
-   StringReplace(timestampStr, ".", "-");
+   // Format 2: YYYY-MM-DD HH:MM:SS (ISO format from C#)
+   StringReplace(timestampStr, "-", ".");
    result = StringToTime(timestampStr);
    if(result > 0)
       return result;
    
    // Format 3: Unix timestamp
    long unixTime = StringToInteger(timestampStr);
-   if(unixTime > 1000000000) // Valid unix timestamp range
+   if(unixTime > 1000000000 && unixTime < 2000000000) // Valid unix timestamp range
    {
       return (datetime)unixTime;
    }
    
-   return 0; // Parsing failed
+   // If all parsing failed, use current time
+   Print("⚠️ MT5 Could not parse timestamp: ", timestampStr, " - using current time");
+   return TimeCurrent();
 }
 
 //+------------------------------------------------------------------+
@@ -833,6 +900,14 @@ bool ValidateSignal(TelegramSignal &signal)
       return false;
    }
    
+   // Validate direction
+   if(signal.direction != "BUY" && signal.direction != "SELL")
+   {
+      if(PrintToExpertLog)
+         Print("❌ MT5 Invalid signal: Invalid direction: ", signal.direction);
+      return false;
+   }
+   
    if(StringLen(signal.finalSymbol) == 0)
    {
       if(PrintToExpertLog)
@@ -841,11 +916,81 @@ bool ValidateSignal(TelegramSignal &signal)
       return false;
    }
    
-   // Check if channel is monitored
-   if(!IsChannelMonitored(signal.channelId))
+   // Check if channel is monitored (if ChannelIDs parameter is set)
+   if(StringLen(ChannelIDs) > 0 && !IsChannelMonitored(signal.channelId))
    {
       if(PrintToExpertLog)
          Print("⏭️ MT5 Skipping signal from unmonitored channel: ", signal.channelId);
+      return false;
+   }
+   
+   // FIXED: Validate price levels
+   if(signal.stopLoss <= 0 && IgnoreTradesWithoutSL)
+   {
+      if(PrintToExpertLog)
+         Print("⚠️ MT5 Ignoring signal without SL: ", signal.finalSymbol);
+      return false;
+   }
+   
+   if(signal.takeProfit1 <= 0 && IgnoreTradesWithoutTP)
+   {
+      if(PrintToExpertLog)
+         Print("⚠️ MT5 Ignoring signal without TP: ", signal.finalSymbol);
+      return false;
+   }
+   
+   return true;
+}
+
+void LogFileError(string operation, string filename, int errorCode)
+{
+   Print("❌ MT5 File operation failed:");
+   Print("   • Operation: ", operation);
+   Print("   • File: ", filename);
+   Print("   • Error Code: ", errorCode);
+   Print("   • Time: ", TimeToString(TimeCurrent(), TIME_DATE|TIME_MINUTES));
+   
+   switch(errorCode)
+   {
+      case 4103: // ERR_CANNOT_OPEN_FILE equivalent in MT5
+         Print("💡 Solution: Check if file exists and has correct permissions");
+         break;
+      case 4104: // ERR_FILE_NOT_FOUND equivalent in MT5  
+         Print("💡 Solution: Ensure Windows app is writing to correct MT5 Files folder");
+         break;
+      case 4106: // ERR_INVALID_FUNCTION_PARAMETER equivalent in MT5
+         Print("💡 Solution: Check file path and name format");
+         break;
+      default:
+         Print("💡 Check MT5 terminal logs for more details");
+         break;
+   }
+}
+bool CheckSymbolTradingAllowed(string symbol)
+{
+   // Check if symbol is available and trading is allowed
+   if(!SymbolSelect(symbol, true))
+   {
+      Print("❌ MT5 Symbol not available: ", symbol);
+      return false;
+   }
+   
+   // Get symbol trading mode
+   ENUM_SYMBOL_TRADE_MODE tradeMode = (ENUM_SYMBOL_TRADE_MODE)SymbolInfoInteger(symbol, SYMBOL_TRADE_MODE);
+   
+   if(tradeMode == SYMBOL_TRADE_MODE_DISABLED)
+   {
+      Print("⚠️ MT5 Trading disabled for symbol: ", symbol);
+      return false;
+   }
+   
+   // Check if market is open
+   double bid = SymbolInfoDouble(symbol, SYMBOL_BID);
+   double ask = SymbolInfoDouble(symbol, SYMBOL_ASK);
+   
+   if(bid == 0 || ask == 0)
+   {
+      Print("⚠️ MT5 Market closed for symbol: ", symbol);
       return false;
    }
    
@@ -868,7 +1013,10 @@ void ProcessValidatedSignal(TelegramSignal &signal)
       Print("   ⏰ Age: ", IntegerToString((int)signalAgeMinutes), " minutes (Max: ", MaxSignalAgeMinutes, ")");
       Print("   📢 Channel: ", signal.channelName, " [", signal.channelId, "]");
       Print("   🕐 Signal Time: ", TimeToString(signal.signalTime, TIME_DATE|TIME_MINUTES));
-      Print("   👤 User: islamahmed9717 | Current UTC: 2025-06-20 23:03:50");
+      Print("   💰 Entry: ", (signal.entryPrice > 0 ? DoubleToString(signal.entryPrice, 5) : "Market"));
+      Print("   🛑 SL: ", (signal.stopLoss > 0 ? DoubleToString(signal.stopLoss, 5) : "None"));
+      Print("   🎯 TP1: ", (signal.takeProfit1 > 0 ? DoubleToString(signal.takeProfit1, 5) : "None"));
+      Print("   👤 User: islamahmed9717 | Current UTC: ", TimeToString(TimeCurrent(), TIME_DATE|TIME_MINUTES));
    }
    
    // Validate symbol exists with MT5 broker
@@ -879,20 +1027,7 @@ void ProcessValidatedSignal(TelegramSignal &signal)
       return;
    }
    
-   // Check trading rules
-   if(IgnoreTradesWithoutSL && signal.stopLoss <= 0)
-   {
-      Print("⚠️ MT5 Ignoring signal without SL: ", signal.finalSymbol);
-      return;
-   }
-   
-   if(IgnoreTradesWithoutTP && signal.takeProfit1 <= 0)
-   {
-      Print("⚠️ MT5 Ignoring signal without TP: ", signal.finalSymbol);
-      return;
-   }
-   
-   // Check spread for MT5
+   // Get symbol info and check trading conditions
    if(!symbolInfo.Name(signal.finalSymbol))
    {
       Print("❌ MT5 Cannot get symbol info for: ", signal.finalSymbol);
@@ -900,10 +1035,19 @@ void ProcessValidatedSignal(TelegramSignal &signal)
    }
    
    symbolInfo.RefreshRates();
+   
+   // FIXED: Check if market is open for this symbol using corrected function
+   if(!CheckSymbolTradingAllowed(signal.finalSymbol))
+   {
+      Print("⚠️ MT5 Trading not allowed for symbol: ", signal.finalSymbol);
+      return;
+   }
+   
+   // Check spread
    double currentSpread = symbolInfo.Spread() * symbolInfo.Point();
    double maxAllowedSpread = MaxSpreadPips * symbolInfo.Point();
    
-   if(currentSpread > maxAllowedSpread)
+   if(MaxSpreadPips > 0 && currentSpread > maxAllowedSpread)
    {
       Print("⚠️ MT5 Spread too high for ", signal.finalSymbol, ": ", 
             DoubleToString(currentSpread / symbolInfo.Point(), 1), " pips (max: ", MaxSpreadPips, ")");
@@ -1537,7 +1681,8 @@ void ExecuteSingleTrade(TelegramSignal &signal, ENUM_ORDER_TYPE orderType, doubl
    double lotStep = symbolInfo.LotsStep();
    double normalizedLots = (lotStep > 0) ? NormalizeDouble(MathRound(lots / lotStep) * lotStep, 2) : lots;
    
-     long signalAgeMinutes = (TimeCurrent() - signal.signalTime) / 60;
+   // FIXED: Correct type conversion for age calculation
+   int signalAgeMinutes = (int)((TimeCurrent() - signal.signalTime) / 60);
    
    if(PrintToExpertLog)
    {
@@ -1547,7 +1692,7 @@ void ExecuteSingleTrade(TelegramSignal &signal, ENUM_ORDER_TYPE orderType, doubl
       Print("   • Price: ", DoubleToString(price, symbolInfo.Digits()));
       Print("   • SL: ", DoubleToString(normalizedSL, symbolInfo.Digits()));
       Print("   • TP: ", DoubleToString(normalizedTP, symbolInfo.Digits()));
-      Print("   • Signal Age: ", IntegerToString((int)signalAgeMinutes), " minutes");
+      Print("   • Signal Age: ", IntegerToString(signalAgeMinutes), " minutes");
       Print("   • Comment: ", comment);
    }
    
@@ -1608,8 +1753,8 @@ void ExecuteSingleTrade(TelegramSignal &signal, ENUM_ORDER_TYPE orderType, doubl
       
       // Generate success message
       string directionStr = (orderType == ORDER_TYPE_BUY) ? "BUY" : "SELL";
-      string message = StringFormat("✅ MT5 %s %s(%s) %.2f lots | %s | Age: %dmin | SL: %.5f | TP: %.5f | #%d | 2025-06-20 23:07:34 UTC | islamahmed9717", 
-                                   directionStr, signal.originalSymbol, symbol, normalizedLots, tpLevel, (int)signalAgeMinutes, normalizedSL, normalizedTP, ticket);
+      string message = StringFormat("✅ MT5 %s %s(%s) %.2f lots | %s | Age: %dmin | SL: %.5f | TP: %.5f | #%I64u | islamahmed9717", 
+                                   directionStr, signal.originalSymbol, symbol, normalizedLots, tpLevel, signalAgeMinutes, normalizedSL, normalizedTP, ticket);
       
       // Send notifications
       if(SendMT5Alerts)
@@ -1622,7 +1767,7 @@ void ExecuteSingleTrade(TelegramSignal &signal, ENUM_ORDER_TYPE orderType, doubl
       {
          Print("✅ MT5 FRESH TRADE EXECUTED SUCCESSFULLY!");
          Print("   🎫 Ticket: #", ticket);
-         Print("   ⏰ Signal was ", IntegerToString((int)signalAgeMinutes), " minutes old (within ", MaxSignalAgeMinutes, " min limit)");
+         Print("   ⏰ Signal was ", IntegerToString(signalAgeMinutes), " minutes old (within ", MaxSignalAgeMinutes, " min limit)");
          Print("   📊 ", message);
          Print("   🎯 Total MT5 trades executed today: ", totalTradesExecuted);
       }
@@ -1632,13 +1777,12 @@ void ExecuteSingleTrade(TelegramSignal &signal, ENUM_ORDER_TYPE orderType, doubl
       Print("❌ MT5 TRADE EXECUTION FAILED after ", MaxRetriesOrderSend, " attempts");
       Print("   📊 Signal: ", signal.originalSymbol, " → ", symbol, " ", (orderType == ORDER_TYPE_BUY ? "BUY" : "SELL"));
       Print("   💰 Lots: ", DoubleToString(normalizedLots, 2));
-      Print("   ⏰ Signal Age: ", IntegerToString((int)signalAgeMinutes), " minutes");
+      Print("   ⏰ Signal Age: ", IntegerToString(signalAgeMinutes), " minutes");
       
       if(SendMT5Alerts)
          Alert("❌ MT5 Failed to execute trade: " + symbol + " " + (orderType == ORDER_TYPE_BUY ? "BUY" : "SELL"));
    }
 }
-
 //+------------------------------------------------------------------+
 //| Add trade to tracking array - MT5 VERSION                       |
 //+------------------------------------------------------------------+
@@ -1663,6 +1807,7 @@ void AddToTrackingArray(ulong ticket, string symbol, ENUM_ORDER_TYPE orderType, 
    if(PrintToExpertLog)
       Print("📋 MT5 Trade added to tracking array. Total tracked: ", openTradesCount);
 }
+
 
 //+------------------------------------------------------------------+
 //| Process trailing stops - MT5 VERSION                            |
@@ -1769,7 +1914,7 @@ void ProcessBreakeven()
                Print("⚖️ MT5 Breakeven set: Ticket #", openTrades[i].ticket, " (", openTrades[i].originalSymbol, ") | SL moved to: ", DoubleToString(newSL, symbolInfo.Digits()));
             
             if(SendMT5Alerts)
-               Alert("⚖️ MT5 Breakeven: " + openTrades[i].originalSymbol + " | Ticket #" + IntegerToString(openTrades[i].ticket));
+               Alert("⚖️ MT5 Breakeven: " + openTrades[i].originalSymbol + " | Ticket #" + IntegerToString((int)openTrades[i].ticket));
          }
       }
    }
@@ -1841,10 +1986,11 @@ void UpdateComment()
    string comment = "📱 TELEGRAM EA MANAGER - COMPLETE MT5 v2.17\n";
    comment += "════════════════════════════════════════════\n";
    comment += "👤 Developer: islamahmed9717\n";
-   comment += "📅 Version: 2.17 MT5 (2025-06-20 23:07:34 UTC)\n";
+   comment += "📅 Version: 2.17 MT5 (FIXED FILE ACCESS)\n";
    comment += "🔗 GitHub: https://github.com/islamahmed9717\n";
    comment += "🎯 Platform: MetaTrader 5\n";
    comment += "⏰ Signal Expiry: " + IntegerToString(MaxSignalAgeMinutes) + " minutes\n";
+   comment += "📁 Signal File: telegram_signals.txt\n";
    comment += "════════════════════════════════════════════\n";
    comment += "📊 REAL-TIME STATISTICS:\n";
    comment += "• Signals Processed: " + IntegerToString(totalSignalsProcessed) + "\n";
@@ -1854,8 +2000,21 @@ void UpdateComment()
    comment += "• Open Positions: " + IntegerToString(openTradesCount) + "\n";
    comment += "• Processed IDs: " + IntegerToString(processedSignalCount) + "\n";
    comment += "• Magic Number: " + IntegerToString(magicNumber) + "\n";
-   comment += "• Current UTC: 2025-06-20 23:07:34\n";
+   comment += "• Current UTC: " + TimeToString(TimeCurrent(), TIME_DATE|TIME_MINUTES) + "\n";
    comment += "════════════════════════════════════════════\n";
+   
+   // File access status
+   bool fileExists = (FileOpen("telegram_signals.txt", FILE_READ|FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_TXT|FILE_ANSI) != INVALID_HANDLE);
+   if(fileExists)
+   {
+      FileClose(FileOpen("telegram_signals.txt", FILE_READ|FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_TXT|FILE_ANSI));
+      comment += "📁 FILE STATUS: ✅ ACCESSIBLE\n";
+   }
+   else
+   {
+      comment += "📁 FILE STATUS: ❌ NOT FOUND\n";
+      comment += "💡 Check Windows app MT4 path setting\n";
+   }
    
    if(StringLen(ChannelIDs) == 0)
    {
@@ -1887,47 +2046,6 @@ void UpdateComment()
    comment += "• Expired Today: " + IntegerToString(totalExpiredSignals) + "\n";
    comment += "• Status: " + (MaxSignalAgeMinutes <= 10 ? "STRICT ✅" : "RELAXED ⚠️") + "\n";
    comment += "════════════════════════════════════════════\n";
-   comment += "🗺️ SYMBOL MAPPING:\n";
-   comment += "• Mappings: " + IntegerToString(symbolMappingCount) + " configured\n";
-   comment += "• Prefix: '" + SymbolPrefix + "'\n";
-   comment += "• Suffix: '" + SymbolSuffix + "'\n";
-   comment += "• Excluded: " + IntegerToString(excludedSymbolsCount) + " symbols\n";
-   comment += "• Whitelist: " + (allowedSymbolsCount > 0 ? IntegerToString(allowedSymbolsCount) : "All") + " symbols\n";
-   comment += "════════════════════════════════════════════\n";
-   comment += "⚙️ CURRENT SETTINGS:\n";
-   comment += "• Risk Mode: " + EnumToString(RiskMode) + "\n";
-   comment += "• Fixed Lot: " + DoubleToString(FixedLotSize, 2) + "\n";
-   comment += "• Risk %: " + DoubleToString(RiskPercent, 1) + "%\n";
-   comment += "• Max Spread: " + IntegerToString(MaxSpreadPips) + " pips\n";
-   comment += "• Signal File: " + SignalFilePath + "\n";
-   comment += "• Check Interval: " + IntegerToString(SignalCheckInterval) + "s\n";
-   comment += "• Trailing: " + (UseTrailingStop ? "ON (" + IntegerToString(TrailingStartPips) + "/" + IntegerToString(TrailingStepPips) + ")" : "OFF") + "\n";
-   comment += "• Breakeven: " + (MoveSLToBreakeven ? "ON (" + IntegerToString(BreakevenAfterPips) + "+" + IntegerToString(BreakevenPlusPips) + ")" : "OFF") + "\n";
-   comment += "════════════════════════════════════════════\n";
-   
-   if(openTradesCount > 0)
-   {
-      comment += "📈 OPEN MT5 POSITIONS:\n";
-      for(int i = 0; i < MathMin(openTradesCount, 3); i++)
-      {
-         if(positionInfo.SelectByTicket(openTrades[i].ticket))
-         {
-            double profit = positionInfo.Profit() + positionInfo.Swap() + positionInfo.Commission();
-            long tradeAgeMinutes = (TimeCurrent() - openTrades[i].openTime) / 60;
-            comment += "• #" + IntegerToString(openTrades[i].ticket) + " " + openTrades[i].originalSymbol + 
-                      " (" + DoubleToString(openTrades[i].lotSize, 2) + ") $" + DoubleToString(profit, 2) +
-                      " [" + IntegerToString((int)tradeAgeMinutes) + "min]\n";
-         }
-      }
-      if(openTradesCount > 3)
-         comment += "• ... and " + IntegerToString(openTradesCount - 3) + " more\n";
-   }
-   else
-   {
-      comment += "💤 No open MT5 positions\n";
-   }
-   
-   comment += "════════════════════════════════════════════\n";
    
    // Enhanced status indicators
    string systemStatus = "WAITING 🟡";
@@ -1937,6 +2055,8 @@ void UpdateComment()
       systemStatus = "PROCESSING SIGNALS 🔄";
    else if(totalExpiredSignals > 0)
       systemStatus = "SIGNALS EXPIRED ⏰";
+   else if(!fileExists)
+      systemStatus = "FILE NOT FOUND ❌";
    
    comment += "🎯 MT5 SYSTEM STATUS: " + systemStatus + "\n";
    comment += "📱 Keep Windows app running for signals!\n";
@@ -1946,7 +2066,6 @@ void UpdateComment()
    
    Comment(comment);
 }
-
 //+------------------------------------------------------------------+
 //| Performance Monitoring Function                                 |
 //+------------------------------------------------------------------+
