@@ -8,7 +8,7 @@ namespace TelegramEAManager
 {
     public class ChannelInfo
     {
-        public int Id { get; set; }
+        public long Id { get; set; }  // Changed from int to long
         public string Title { get; set; } = "";
         public string Username { get; set; } = "";
         public string Type { get; set; } = "";

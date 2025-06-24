@@ -53,6 +53,12 @@ input bool IgnoreTradesWithoutSL = false; // Ignore signals without SL
 input bool IgnoreTradesWithoutTP = false; // Ignore signals without TP
 input int MaxRetriesOrderSend = 3; // Maximum retries for order execution
 
+input group "==== PRICE TOLERANCE SETTINGS ===="
+input int PriceTolerancePips = 15; // Price tolerance in pips (slippage)
+input bool UseMarketPriceIfExceeded = true; // Use market price if tolerance exceeded
+input bool SkipSignalIfExceeded = false; // Skip signal if tolerance exceeded
+
+
 input group "==== ADVANCED FEATURES ===="
 input bool UseTrailingStop = false; // Enable trailing stop
 input int TrailingStartPips = 20; // Start trailing after X pips profit
@@ -607,126 +613,114 @@ void CheckForNewSignals()
 //+------------------------------------------------------------------+
 bool ProcessFormattedSignalLine(string line)
 {
-   string parts[];
-   int partCount = StringSplit(line, '|', parts);
-   
-   // Expected format: TIMESTAMP|CHANNEL_ID|CHANNEL_NAME|DIRECTION|SYMBOL|ENTRY|SL|TP1|TP2|TP3|STATUS
-   if(partCount < 11)
-      return false;
-   
-   TelegramSignal signal;
-   signal.signalId = GenerateSignalId(line);
-   signal.receivedTime = TimeCurrent();
-   
-   // Parse timestamp (first part) - FIXED: Handle both formats
-   string timestampStr = parts[0];
-   StringTrimLeft(timestampStr);
-   StringTrimRight(timestampStr);
-   signal.signalTime = ParseTimestamp(timestampStr);
-   
-   // If timestamp parsing failed, use current time
-   if(signal.signalTime == 0)
-      signal.signalTime = TimeCurrent();
-   
-   // FIXED: Check signal status - only process NEW signals
-   string signalStatus = parts[10];
-   StringTrimLeft(signalStatus);
-   StringTrimRight(signalStatus);
-   
-   if(signalStatus != "NEW" && signalStatus != "PROCESSED")
-   {
-      // Skip signals that are not new or already processed
-      return true;
-   }
-   
-   // Check if signal is too old
-   long signalAgeMinutes = (TimeCurrent() - signal.signalTime) / 60;
-   
-   if(signalAgeMinutes > MaxSignalAgeMinutes)
-   {
-      if(PrintToExpertLog)
-         Print("⏰ MT5 Signal expired (", IntegerToString((int)signalAgeMinutes), " min old): ", StringSubstr(line, 0, 50), "...");
-      
-      totalExpiredSignals++;
-      signal.isExpired = true;
-      return true; // Successfully processed (but expired)
-   }
-   
-   // Check if already processed
-   if(IsSignalAlreadyProcessed(signal.signalId))
-   {
-      return true; // Already processed, skip
-   }
-   
-   // Parse remaining parts with better error handling
-   if(partCount >= 2) 
-   {
-      signal.channelId = parts[1];
-      StringTrimLeft(signal.channelId);
-      StringTrimRight(signal.channelId);
-   }
-   if(partCount >= 3) 
-   {
-      signal.channelName = parts[2];
-      StringTrimLeft(signal.channelName);
-      StringTrimRight(signal.channelName);
-   }
-   if(partCount >= 4) 
-   {
-      signal.direction = parts[3];
-      StringTrimLeft(signal.direction);
-      StringTrimRight(signal.direction);
-      StringToUpper(signal.direction); // Normalize direction
-   }
-   if(partCount >= 5) 
-   {
-      signal.originalSymbol = parts[4];
-      StringTrimLeft(signal.originalSymbol);
-      StringTrimRight(signal.originalSymbol);
-      StringToUpper(signal.originalSymbol); // Normalize symbol
-   }
-   
-   // Parse prices with validation
-   if(partCount >= 6) 
-   {
-      double entryPrice = StringToDouble(parts[5]);
-      signal.entryPrice = (entryPrice > 0) ? entryPrice : 0; // 0 means market order
-   }
-   if(partCount >= 7) 
-   {
-      signal.stopLoss = StringToDouble(parts[6]);
-   }
-   if(partCount >= 8) 
-   {
-      signal.takeProfit1 = StringToDouble(parts[7]);
-   }
-   if(partCount >= 9) 
-   {
-      signal.takeProfit2 = StringToDouble(parts[8]);
-   }
-   if(partCount >= 10) 
-   {
-      signal.takeProfit3 = StringToDouble(parts[9]);
-   }
-   
-   signal.originalText = line;
-   signal.finalSymbol = ProcessSymbolTransformation(signal.originalSymbol);
-   signal.isExpired = false;
-   signal.isProcessed = false;
-   
-   // Validate and process signal
-   if(ValidateSignal(signal))
-   {
-      ProcessValidatedSignal(signal);
-      AddToProcessedSignals(signal.signalId);
-      
-      // FIXED: Mark signal as processed in the file (optional)
-      MarkSignalAsProcessed(line);
-   }
-   
-   return true;
+    string parts[];
+    int partCount = StringSplit(line, '|', parts);
+    
+    // Expected format: TIMESTAMP|CHANNEL_ID|CHANNEL_NAME|DIRECTION|SYMBOL|ENTRY|SL|TP1|TP2|TP3|STATUS
+    if(partCount < 11)
+        return false;
+    
+    // FIXED: Check signal status - only process NEW signals
+    string signalStatus = parts[10];
+    StringTrimLeft(signalStatus);
+    StringTrimRight(signalStatus);
+    
+    // Skip if not NEW
+    if(signalStatus != "NEW")
+    {
+        return true; // Successfully processed (but skipped)
+    }
+    
+    TelegramSignal signal;
+    signal.signalId = GenerateSignalId(line);
+    signal.receivedTime = TimeCurrent();
+    
+    // Parse timestamp
+    string timestampStr = parts[0];
+    StringTrimLeft(timestampStr);
+    StringTrimRight(timestampStr);
+    signal.signalTime = ParseTimestamp(timestampStr);
+    
+    // If timestamp parsing failed, use current time
+    if(signal.signalTime == 0)
+        signal.signalTime = TimeCurrent();
+    
+    // Check signal age
+    long signalAgeMinutes = (TimeCurrent() - signal.signalTime) / 60;
+    
+    if(signalAgeMinutes > MaxSignalAgeMinutes)
+    {
+        // Mark this signal as processed in our tracking
+        AddToProcessedSignals(signal.signalId);
+        return true; // Successfully processed (but expired)
+    }
+    
+    // Check if already processed
+    if(IsSignalAlreadyProcessed(signal.signalId))
+    {
+        return true; // Already processed, skip
+    }
+    
+    // Parse remaining parts
+    signal.channelId = parts[1];
+    signal.channelName = parts[2];
+    signal.direction = parts[3];
+    signal.originalSymbol = parts[4];
+    signal.entryPrice = StringToDouble(parts[5]);
+    signal.stopLoss = StringToDouble(parts[6]);
+    signal.takeProfit1 = StringToDouble(parts[7]);
+    signal.takeProfit2 = StringToDouble(parts[8]);
+    signal.takeProfit3 = StringToDouble(parts[9]);
+    
+    signal.originalText = line;
+    signal.finalSymbol = ProcessSymbolTransformation(signal.originalSymbol);
+    signal.isExpired = false;
+    signal.isProcessed = false;
+    
+    // Validate stops before processing
+    if(!ValidateStopLevels(signal))
+    {
+        Print("❌ MT5 Invalid stop levels for ", signal.finalSymbol);
+        AddToProcessedSignals(signal.signalId); // Don't retry invalid signals
+        return true;
+    }
+    
+    // Validate and process signal
+    if(ValidateSignal(signal))
+    {
+        ProcessValidatedSignal(signal);
+        AddToProcessedSignals(signal.signalId);
+    }
+    
+    return true;
 }
 
+bool ValidateStopLevels(TelegramSignal &signal)
+{
+    if(signal.stopLoss <= 0 || signal.takeProfit1 <= 0)
+        return true; // No stops to validate
+    
+    if(signal.direction == "BUY")
+    {
+        // For BUY: SL < current price < TP
+        if(signal.stopLoss >= signal.takeProfit1)
+        {
+            Print("❌ Invalid BUY stops: SL=", signal.stopLoss, " >= TP=", signal.takeProfit1);
+            return false;
+        }
+    }
+    else if(signal.direction == "SELL")
+    {
+        // For SELL: SL > current price > TP
+        if(signal.stopLoss <= signal.takeProfit1)
+        {
+            Print("❌ Invalid SELL stops: SL=", signal.stopLoss, " <= TP=", signal.takeProfit1);
+            return false;
+        }
+    }
+    
+    return true;
+}
 void MarkSignalAsProcessed(string originalLine)
 {
    // Optional: Mark signal as processed in the file
@@ -799,36 +793,36 @@ string GenerateSignalId(string content)
 //+------------------------------------------------------------------+
 datetime ParseTimestamp(string timestampStr)
 {
-   datetime result = 0;
-   
-   // Remove any extra spaces
-   StringTrimLeft(timestampStr);
-   StringTrimRight(timestampStr);
-   
-   // Format 1: YYYY.MM.DD HH:MM:SS (MT5 standard)
-   if(StringLen(timestampStr) >= 19)
-   {
-      result = StringToTime(timestampStr);
-      if(result > 0)
-         return result;
-   }
-   
-   // Format 2: YYYY-MM-DD HH:MM:SS (ISO format from C#)
-   StringReplace(timestampStr, "-", ".");
-   result = StringToTime(timestampStr);
-   if(result > 0)
-      return result;
-   
-   // Format 3: Unix timestamp
-   long unixTime = StringToInteger(timestampStr);
-   if(unixTime > 1000000000 && unixTime < 2000000000) // Valid unix timestamp range
-   {
-      return (datetime)unixTime;
-   }
-   
-   // If all parsing failed, use current time
-   Print("⚠️ MT5 Could not parse timestamp: ", timestampStr, " - using current time");
-   return TimeCurrent();
+    datetime result = 0;
+    
+    // Remove any extra spaces
+    StringTrimLeft(timestampStr);
+    StringTrimRight(timestampStr);
+    
+    // Format 1: YYYY.MM.DD HH:MM:SS (MT5 standard)
+    if(StringLen(timestampStr) >= 19)
+    {
+        result = StringToTime(timestampStr);
+        if(result > 0)
+            return result;
+    }
+    
+    // Format 2: YYYY-MM-DD HH:MM:SS (ISO format from C#)
+    StringReplace(timestampStr, "-", ".");
+    result = StringToTime(timestampStr);
+    if(result > 0)
+        return result;
+    
+    // Format 3: Unix timestamp
+    long unixTime = StringToInteger(timestampStr);
+    if(unixTime > 1000000000 && unixTime < 2000000000) // Valid unix timestamp range
+    {
+        return (datetime)unixTime;
+    }
+    
+    // If all parsing failed, use current time
+    Print("⚠️ MT5 Could not parse timestamp: ", timestampStr, " - using current time");
+    return TimeCurrent();
 }
 
 //+------------------------------------------------------------------+
@@ -1671,17 +1665,124 @@ void ExecuteSingleTrade(TelegramSignal &signal, ENUM_ORDER_TYPE orderType, doubl
    
    // Get current prices
    symbolInfo.RefreshRates();
-   double price = (orderType == ORDER_TYPE_BUY) ? symbolInfo.Ask() : symbolInfo.Bid();
+   double currentBid = symbolInfo.Bid();
+   double currentAsk = symbolInfo.Ask();
+   double currentPrice = (orderType == ORDER_TYPE_BUY) ? currentAsk : currentBid;
+   
+   // Calculate price tolerance
+   double tolerancePoints = PriceTolerancePips * symbolInfo.Point();
+   double signalPrice = signal.entryPrice;
+   
+   // Check if signal has specific entry price
+   bool useMarketOrder = (signalPrice <= 0);
+   
+   if(!useMarketOrder && PriceTolerancePips > 0)
+   {
+      // Calculate price difference
+      double priceDiff = MathAbs(currentPrice - signalPrice);
+      double priceDiffPips = priceDiff / symbolInfo.Point();
+      
+      if(PrintToExpertLog)
+      {
+         Print("💹 MT5 Price Check:");
+         Print("   • Signal Price: ", DoubleToString(signalPrice, symbolInfo.Digits()));
+         Print("   • Current Price: ", DoubleToString(currentPrice, symbolInfo.Digits()));
+         Print("   • Difference: ", DoubleToString(priceDiffPips, 1), " pips");
+         Print("   • Tolerance: ", PriceTolerancePips, " pips");
+      }
+      
+      // Check if price moved beyond tolerance
+      if(priceDiff > tolerancePoints)
+      {
+         if(SkipSignalIfExceeded)
+         {
+            Print("⚠️ MT5 Price moved ", DoubleToString(priceDiffPips, 1), 
+                  " pips - exceeds tolerance (", PriceTolerancePips, " pips). Skipping signal.");
+            return;
+         }
+         else if(UseMarketPriceIfExceeded)
+         {
+            Print("💹 MT5 Price moved ", DoubleToString(priceDiffPips, 1), 
+                  " pips - using market price instead of signal price");
+            useMarketOrder = true;
+         }
+      }
+      else
+      {
+         // Price within tolerance - check if it's still valid for the direction
+         if(orderType == ORDER_TYPE_BUY)
+         {
+            // For BUY: current price should not be too far above signal price
+            if(currentPrice > signalPrice + tolerancePoints)
+            {
+               if(SkipSignalIfExceeded)
+               {
+                  Print("⚠️ MT5 BUY price too high. Signal: ", DoubleToString(signalPrice, symbolInfo.Digits()),
+                        " Current: ", DoubleToString(currentPrice, symbolInfo.Digits()));
+                  return;
+               }
+               useMarketOrder = true;
+            }
+         }
+         else // SELL
+         {
+            // For SELL: current price should not be too far below signal price
+            if(currentPrice < signalPrice - tolerancePoints)
+            {
+               if(SkipSignalIfExceeded)
+               {
+                  Print("⚠️ MT5 SELL price too low. Signal: ", DoubleToString(signalPrice, symbolInfo.Digits()),
+                        " Current: ", DoubleToString(currentPrice, symbolInfo.Digits()));
+                  return;
+               }
+               useMarketOrder = true;
+            }
+         }
+      }
+   }
+   
+   // Determine final execution price
+   double executionPrice = useMarketOrder ? currentPrice : signalPrice;
+   
+   // Adjust SL/TP based on actual execution price if needed
+   double adjustedSL = sl;
+   double adjustedTP = tp;
+   
+   if(!useMarketOrder && signalPrice > 0 && MathAbs(executionPrice - signalPrice) > symbolInfo.Point())
+   {
+      // Adjust SL/TP proportionally if price changed
+      double priceShift = executionPrice - signalPrice;
+      
+      if(sl > 0)
+         adjustedSL = sl + priceShift;
+      if(tp > 0)
+         adjustedTP = tp + priceShift;
+      
+      if(PrintToExpertLog)
+      {
+         Print("📊 MT5 Adjusted levels due to price shift:");
+         Print("   • SL: ", DoubleToString(sl, symbolInfo.Digits()), " → ", 
+               DoubleToString(adjustedSL, symbolInfo.Digits()));
+         Print("   • TP: ", DoubleToString(tp, symbolInfo.Digits()), " → ", 
+               DoubleToString(adjustedTP, symbolInfo.Digits()));
+      }
+   }
    
    // Normalize prices for MT5
-   double normalizedSL = (sl > 0) ? symbolInfo.NormalizePrice(sl) : 0;
-   double normalizedTP = (tp > 0) ? symbolInfo.NormalizePrice(tp) : 0;
+   double normalizedSL = (adjustedSL > 0) ? symbolInfo.NormalizePrice(adjustedSL) : 0;
+   double normalizedTP = (adjustedTP > 0) ? symbolInfo.NormalizePrice(adjustedTP) : 0;
+   
+   // Validate final stop levels
+   if(!ValidateFinalStopLevels(symbol, orderType, executionPrice, normalizedSL, normalizedTP))
+   {
+      Print("❌ MT5 Invalid stop levels after adjustment. Skipping trade.");
+      return;
+   }
    
    // Adjust lot size to MT5 symbol requirements
    double lotStep = symbolInfo.LotsStep();
    double normalizedLots = (lotStep > 0) ? NormalizeDouble(MathRound(lots / lotStep) * lotStep, 2) : lots;
    
-   // FIXED: Correct type conversion for age calculation
    int signalAgeMinutes = (int)((TimeCurrent() - signal.signalTime) / 60);
    
    if(PrintToExpertLog)
@@ -1689,7 +1790,8 @@ void ExecuteSingleTrade(TelegramSignal &signal, ENUM_ORDER_TYPE orderType, doubl
       Print("🎯 MT5 Executing ", EnumToString(orderType), " order:");
       Print("   • Symbol: ", symbol, " (", signal.originalSymbol, ")");
       Print("   • Lots: ", DoubleToString(normalizedLots, 2));
-      Print("   • Price: ", DoubleToString(price, symbolInfo.Digits()));
+      Print("   • Execution Price: ", DoubleToString(executionPrice, symbolInfo.Digits()),
+            useMarketOrder ? " (MARKET)" : " (LIMIT)");
       Print("   • SL: ", DoubleToString(normalizedSL, symbolInfo.Digits()));
       Print("   • TP: ", DoubleToString(normalizedTP, symbolInfo.Digits()));
       Print("   • Signal Age: ", IntegerToString(signalAgeMinutes), " minutes");
@@ -1707,11 +1809,36 @@ void ExecuteSingleTrade(TelegramSignal &signal, ENUM_ORDER_TYPE orderType, doubl
       if(PrintToExpertLog && attempts > 1)
          Print("🔄 MT5 Retry attempt #", attempts, " for ", symbol);
       
+      // Set maximum deviation for market orders
+      trade.SetDeviationInPoints((ulong)(PriceTolerancePips * 10));
+      
       // Use MT5 trade functions
-      if(orderType == ORDER_TYPE_BUY)
-         result = trade.Buy(normalizedLots, symbol, price, normalizedSL, normalizedTP, comment);
+      if(useMarketOrder)
+      {
+         // Market order
+         if(orderType == ORDER_TYPE_BUY)
+            result = trade.Buy(normalizedLots, symbol, 0, normalizedSL, normalizedTP, comment);
+         else
+            result = trade.Sell(normalizedLots, symbol, 0, normalizedSL, normalizedTP, comment);
+      }
       else
-         result = trade.Sell(normalizedLots, symbol, price, normalizedSL, normalizedTP, comment);
+      {
+         // Limit order at specific price
+         if(orderType == ORDER_TYPE_BUY)
+         {
+            if(executionPrice <= currentAsk)
+               result = trade.Buy(normalizedLots, symbol, executionPrice, normalizedSL, normalizedTP, comment);
+            else
+               result = trade.BuyLimit(normalizedLots, executionPrice, symbol, normalizedSL, normalizedTP, 0, 0, comment);
+         }
+         else
+         {
+            if(executionPrice >= currentBid)
+               result = trade.Sell(normalizedLots, symbol, executionPrice, normalizedSL, normalizedTP, comment);
+            else
+               result = trade.SellLimit(normalizedLots, executionPrice, symbol, normalizedSL, normalizedTP, 0, 0, comment);
+         }
+      }
       
       if(!result)
       {
@@ -1723,7 +1850,7 @@ void ExecuteSingleTrade(TelegramSignal &signal, ENUM_ORDER_TYPE orderType, doubl
          {
             Sleep(500);
             symbolInfo.RefreshRates();
-            price = (orderType == ORDER_TYPE_BUY) ? symbolInfo.Ask() : symbolInfo.Bid();
+            currentPrice = (orderType == ORDER_TYPE_BUY) ? symbolInfo.Ask() : symbolInfo.Bid();
          }
          else if(errorCode == TRADE_RETCODE_NO_MONEY)
          {
@@ -1749,12 +1876,13 @@ void ExecuteSingleTrade(TelegramSignal &signal, ENUM_ORDER_TYPE orderType, doubl
       ulong ticket = trade.ResultOrder();
       
       // Add to MT5 tracking array
-      AddToTrackingArray(ticket, symbol, orderType, normalizedLots, price, normalizedSL, normalizedTP, signal.originalSymbol);
+      AddToTrackingArray(ticket, symbol, orderType, normalizedLots, executionPrice, normalizedSL, normalizedTP, signal.originalSymbol);
       
       // Generate success message
       string directionStr = (orderType == ORDER_TYPE_BUY) ? "BUY" : "SELL";
-      string message = StringFormat("✅ MT5 %s %s(%s) %.2f lots | %s | Age: %dmin | SL: %.5f | TP: %.5f | #%I64u | islamahmed9717", 
-                                   directionStr, signal.originalSymbol, symbol, normalizedLots, tpLevel, signalAgeMinutes, normalizedSL, normalizedTP, ticket);
+      string priceInfo = useMarketOrder ? "MARKET" : DoubleToString(executionPrice, symbolInfo.Digits());
+      string message = StringFormat("✅ MT5 %s %s(%s) %.2f lots @ %s | %s | Age: %dmin | SL: %.5f | TP: %.5f | #%I64u | islamahmed9717", 
+                                   directionStr, signal.originalSymbol, symbol, normalizedLots, priceInfo, tpLevel, signalAgeMinutes, normalizedSL, normalizedTP, ticket);
       
       // Send notifications
       if(SendMT5Alerts)
@@ -1765,9 +1893,10 @@ void ExecuteSingleTrade(TelegramSignal &signal, ENUM_ORDER_TYPE orderType, doubl
       
       if(PrintToExpertLog)
       {
-         Print("✅ MT5 FRESH TRADE EXECUTED SUCCESSFULLY!");
+         Print("✅ MT5 TRADE EXECUTED SUCCESSFULLY!");
          Print("   🎫 Ticket: #", ticket);
-         Print("   ⏰ Signal was ", IntegerToString(signalAgeMinutes), " minutes old (within ", MaxSignalAgeMinutes, " min limit)");
+         Print("   ⏰ Signal was ", IntegerToString(signalAgeMinutes), " minutes old");
+         Print("   💹 Price tolerance: ", PriceTolerancePips, " pips");
          Print("   📊 ", message);
          Print("   🎯 Total MT5 trades executed today: ", totalTradesExecuted);
       }
@@ -1782,6 +1911,72 @@ void ExecuteSingleTrade(TelegramSignal &signal, ENUM_ORDER_TYPE orderType, doubl
       if(SendMT5Alerts)
          Alert("❌ MT5 Failed to execute trade: " + symbol + " " + (orderType == ORDER_TYPE_BUY ? "BUY" : "SELL"));
    }
+}
+
+bool ValidateFinalStopLevels(string symbol, ENUM_ORDER_TYPE orderType, double price, double sl, double tp)
+{
+   if(sl <= 0 || tp <= 0)
+      return true; // No stops to validate
+   
+   // Get minimum stop level
+   int stopLevel = (int)SymbolInfoInteger(symbol, SYMBOL_TRADE_STOPS_LEVEL);
+   double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
+   double minDistance = stopLevel * point;
+   
+   if(orderType == ORDER_TYPE_BUY)
+   {
+      // For BUY: SL must be below price, TP must be above price
+      if(sl >= price)
+      {
+         Print("❌ Invalid BUY: SL (", DoubleToString(sl, _Digits), ") >= Price (", DoubleToString(price, _Digits), ")");
+         return false;
+      }
+      if(tp <= price)
+      {
+         Print("❌ Invalid BUY: TP (", DoubleToString(tp, _Digits), ") <= Price (", DoubleToString(price, _Digits), ")");
+         return false;
+      }
+      
+      // Check minimum distances
+      if(price - sl < minDistance)
+      {
+         Print("❌ BUY SL too close. Min distance: ", IntegerToString(stopLevel), " points");
+         return false;
+      }
+      if(tp - price < minDistance)
+      {
+         Print("❌ BUY TP too close. Min distance: ", IntegerToString(stopLevel), " points");
+         return false;
+      }
+   }
+   else // SELL
+   {
+      // For SELL: SL must be above price, TP must be below price
+      if(sl <= price)
+      {
+         Print("❌ Invalid SELL: SL (", DoubleToString(sl, _Digits), ") <= Price (", DoubleToString(price, _Digits), ")");
+         return false;
+      }
+      if(tp >= price)
+      {
+         Print("❌ Invalid SELL: TP (", DoubleToString(tp, _Digits), ") >= Price (", DoubleToString(price, _Digits), ")");
+         return false;
+      }
+      
+      // Check minimum distances
+      if(sl - price < minDistance)
+      {
+         Print("❌ SELL SL too close. Min distance: ", IntegerToString(stopLevel), " points");
+         return false;
+      }
+      if(price - tp < minDistance)
+      {
+         Print("❌ SELL TP too close. Min distance: ", IntegerToString(stopLevel), " points");
+         return false;
+      }
+   }
+   
+   return true;
 }
 //+------------------------------------------------------------------+
 //| Add trade to tracking array - MT5 VERSION                       |

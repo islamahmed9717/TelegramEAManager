@@ -22,10 +22,13 @@ namespace TelegramEAManager
         private readonly Dictionary<long, int> lastMessageIds = new Dictionary<long, int>();
         private System.Threading.Timer? messagePollingTimer;
         private readonly List<long> monitoredChannels = new List<long>();
+        private bool isMonitoring = false;
 
         // Events for real-time message processing
         public event EventHandler<(string message, long channelId, string channelName)>? NewMessageReceived;
         public event EventHandler<string>? ErrorOccurred;
+        public event EventHandler<string>? DebugMessage; // Add debug event
+
 
         public TelegramService()
         {
@@ -462,20 +465,78 @@ STEP 7: 📋 Copy the api_id (numbers) and api_hash (long string) below"
 
                 foreach (var dialog in dialogs.dialogs)
                 {
-                    if (dialogs.chats.TryGetValue(dialog.Peer.ID, out var chat) && chat is Channel channel)
+                    try
                     {
-                        channels.Add(new ChannelInfo
+                        // Check for channels
+                        if (dialogs.chats.TryGetValue(dialog.Peer.ID, out var chat))
                         {
-                            Id = (int)channel.ID,
-                            Title = channel.Title ?? "",
-                            Username = channel.username ?? "",
-                            Type = DetermineChannelType(channel),
-                            MembersCount = channel.participants_count,
-                            AccessHash = channel.access_hash,
-                            LastActivity = DateTime.UtcNow
-                        });
+                            if (chat is Channel channel)
+                            {
+                                channels.Add(new ChannelInfo
+                                {
+                                    Id = channel.ID,  // This is already long
+                                    Title = channel.Title ?? "",
+                                    Username = channel.username ?? "",
+                                    Type = DetermineChannelType(channel),
+                                    MembersCount = channel.participants_count,
+                                    AccessHash = channel.access_hash,
+                                    LastActivity = DateTime.UtcNow
+                                });
+
+                                // Debug logging
+                                Console.WriteLine($"Found channel: {channel.Title} (ID: {channel.ID}, Username: {channel.username})");
+                            }
+                            else if (chat is Chat regularChat)
+                            {
+                                // Also include regular chats if they match signal patterns
+                                if (IsSignalRelatedChat(regularChat.Title))
+                                {
+                                    channels.Add(new ChannelInfo
+                                    {
+                                        Id = regularChat.ID,  // This is already long
+                                        Title = regularChat.Title ?? "",
+                                        Username = "",
+                                        Type = "Group",
+                                        MembersCount = regularChat.participants_count,
+                                        AccessHash = 0,
+                                        LastActivity = DateTime.UtcNow
+                                    });
+
+                                    Console.WriteLine($"Found chat: {regularChat.Title} (ID: {regularChat.ID})");
+                                }
+                            }
+                        }
+
+                        // Also check for bot channels or users that might be signal providers
+                        if (dialog.Peer is PeerUser && dialogs.users.TryGetValue(dialog.Peer.ID, out var user))
+                        {
+                            if (user.IsBot && IsSignalRelatedChat(user.first_name + " " + user.last_name))
+                            {
+                                channels.Add(new ChannelInfo
+                                {
+                                    Id = user.ID,  // This is already long
+                                    Title = $"{user.first_name} {user.last_name}".Trim(),
+                                    Username = user.username ?? "",
+                                    Type = "Bot",
+                                    MembersCount = 0,
+                                    AccessHash = user.access_hash,
+                                    LastActivity = DateTime.UtcNow
+                                });
+
+                                Console.WriteLine($"Found bot: {user.first_name} {user.last_name} (ID: {user.ID})");
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"Error processing dialog: {ex.Message}");
                     }
                 }
+
+                // Sort channels by title for easier finding
+                channels = channels.OrderBy(c => c.Title).ToList();
+
+                Console.WriteLine($"Total channels/chats found: {channels.Count}");
             }
             catch (Exception ex)
             {
@@ -485,6 +546,17 @@ STEP 7: 📋 Copy the api_id (numbers) and api_hash (long string) below"
             return channels;
         }
 
+        private bool IsSignalRelatedChat(string? title)
+        {
+            if (string.IsNullOrEmpty(title))
+                return false;
+
+            var lowerTitle = title.ToLower();
+            var signalKeywords = new[] { "signal", "indicator", "trading", "forex", "crypto", "vip", "premium", "gold" };
+
+            return signalKeywords.Any(keyword => lowerTitle.Contains(keyword));
+        }
+
         /// <summary>
         /// Start monitoring selected channels for new messages
         /// </summary>
@@ -492,6 +564,8 @@ STEP 7: 📋 Copy the api_id (numbers) and api_hash (long string) below"
         {
             try
             {
+                OnDebugMessage($"Starting monitoring for {channels.Count} channels");
+
                 // Clear previous monitoring
                 StopMonitoring();
 
@@ -504,16 +578,31 @@ STEP 7: 📋 Copy the api_id (numbers) and api_hash (long string) below"
                     {
                         lastMessageIds[channel.Id] = 0;
                     }
+                    OnDebugMessage($"Monitoring channel: {channel.Title} (ID: {channel.Id})");
                 }
 
-                // Start polling timer (check every 3 seconds)
-                messagePollingTimer = new System.Threading.Timer(async _ => await PollAllChannelsAsync(), null, TimeSpan.Zero, TimeSpan.FromSeconds(3));
+                isMonitoring = true;
+
+                // Start with immediate check
+                Task.Run(async () => await PollAllChannelsAsync());
+
+                // Start polling timer (check every 2 seconds for better responsiveness)
+                messagePollingTimer = new System.Threading.Timer(
+                    async _ => await PollAllChannelsAsync(),
+                    null,
+                    TimeSpan.FromSeconds(2),
+                    TimeSpan.FromSeconds(2)
+                );
+
+                OnDebugMessage("Monitoring started successfully");
             }
             catch (Exception ex)
             {
                 OnErrorOccurred($"Failed to start monitoring: {ex.Message}");
+                OnDebugMessage($"Monitoring error: {ex}");
             }
         }
+
 
         /// <summary>
         /// Stop monitoring channels
@@ -530,24 +619,40 @@ STEP 7: 📋 Copy the api_id (numbers) and api_hash (long string) below"
         /// </summary>
         private async Task PollAllChannelsAsync()
         {
-            if (client == null || !IsUserAuthorized())
+            if (!isMonitoring || client == null || !IsUserAuthorized())
+            {
+                OnDebugMessage("Skipping poll - not monitoring or not authorized");
                 return;
+            }
 
             try
             {
+                OnDebugMessage($"Polling {monitoredChannels.Count} channels...");
+
                 foreach (var channelId in monitoredChannels.ToList())
                 {
-                    await PollChannelForNewMessages(channelId);
+                    try
+                    {
+                        await PollChannelForNewMessages(channelId);
+                    }
+                    catch (Exception ex)
+                    {
+                        OnDebugMessage($"Error polling channel {channelId}: {ex.Message}");
+                    }
                 }
             }
             catch (Exception ex)
             {
                 OnErrorOccurred($"Error polling channels: {ex.Message}");
+                OnDebugMessage($"Poll error: {ex}");
             }
         }
 
         /// <summary>
-        /// Poll specific channel for new messages
+        /// Poll specific channel for new messages - FIXED VERSION
+        /// </summary>
+        /// <summary>
+        /// Poll specific channel for new messages - FIXED VERSION
         /// </summary>
         private async Task PollChannelForNewMessages(long channelId)
         {
@@ -555,31 +660,128 @@ STEP 7: 📋 Copy the api_id (numbers) and api_hash (long string) below"
             {
                 if (client == null) return;
 
-                // Get channel access hash (we need to store this when getting channels)
+                OnDebugMessage($"Polling channel ID: {channelId}");
+
+                // Get channel access hash
                 var dialogs = await client.Messages_GetAllDialogs();
+
+                // Try to find as Channel
                 var channel = dialogs.chats.Values.OfType<Channel>().FirstOrDefault(c => c.ID == channelId);
 
-                if (channel == null) return;
-
-                var inputChannel = new InputChannel(channelId, channel.access_hash);
-                var history = await client.Messages_GetHistory(inputChannel, limit: 10);
-
-                var lastKnownId = lastMessageIds.GetValueOrDefault(channelId, 0);
-
-                foreach (var message in history.Messages.OfType<TL.Message>().OrderBy(m => m.ID))
+                if (channel != null)
                 {
-                    if (message.ID > lastKnownId && !string.IsNullOrEmpty(message.message))
+                    OnDebugMessage($"Found channel: {channel.Title}");
+
+                    var inputChannel = new InputChannel(channelId, channel.access_hash);
+                    var history = await client.Messages_GetHistory(inputChannel, limit: 20); // Get more messages
+
+                    var lastKnownId = lastMessageIds.GetValueOrDefault(channelId, 0);
+                    OnDebugMessage($"Last known message ID for {channel.Title}: {lastKnownId}");
+
+                    var newMessages = 0;
+                    foreach (var message in history.Messages.OfType<TL.Message>().OrderBy(m => m.ID))
                     {
-                        // New message found - trigger event
-                        OnNewMessageReceived(message.message, channelId, channel.Title ?? $"Channel_{channelId}");
-                        lastMessageIds[channelId] = message.ID;
+                        if (message.ID > lastKnownId && !string.IsNullOrEmpty(message.message))
+                        {
+                            newMessages++;
+                            OnDebugMessage($"New message in {channel.Title}: ID={message.ID}, Length={message.message.Length}");
+
+                            // New message found - trigger event
+                            OnNewMessageReceived(message.message, channelId, channel.Title ?? $"Channel_{channelId}");
+                            lastMessageIds[channelId] = message.ID;
+                        }
+                    }
+
+                    if (newMessages == 0)
+                    {
+                        OnDebugMessage($"No new messages in {channel.Title}");
+                    }
+                }
+                else
+                {
+                    // Try as regular chat or user
+                    var chat = dialogs.chats.Values.FirstOrDefault(c => c.ID == channelId);
+                    if (chat != null)
+                    {
+                        // Fixed: Get display name based on chat type
+                        string chatName = "";
+                        if (chat is Chat regularChatObj)
+                        {
+                            chatName = regularChatObj.Title;
+                            OnDebugMessage($"Found chat: {chatName}");
+                        }
+                        else if (chat is Channel channelObj)
+                        {
+                            chatName = channelObj.Title;
+                            OnDebugMessage($"Found channel (as chat): {chatName}");
+                        }
+
+                        // Check if it's a user instead
+                        var user = dialogs.users.Values.FirstOrDefault(u => u.ID == channelId);
+                        if (user != null)
+                        {
+                            chatName = $"{user.first_name} {user.last_name}".Trim();
+                            OnDebugMessage($"Found user: {chatName}");
+                        }
+
+                        // Fixed: Create input peer based on actual type
+                        InputPeer? inputPeer = null;
+
+                        if (chat is Channel channelObj2)
+                        {
+                            inputPeer = new InputPeerChannel(channelObj2.ID, channelObj2.access_hash);
+                        }
+                        else if (chat is Chat regularChatObj2)
+                        {
+                            inputPeer = new InputPeerChat(regularChatObj2.ID);
+                        }
+                        else if (user != null)
+                        {
+                            inputPeer = new InputPeerUser(user.ID, user.access_hash);
+                        }
+
+                        if (inputPeer != null)
+                        {
+                            var history = await client.Messages_GetHistory(inputPeer, limit: 20);
+                            var lastKnownId = lastMessageIds.GetValueOrDefault(channelId, 0);
+
+                            foreach (var message in history.Messages.OfType<TL.Message>().OrderBy(m => m.ID))
+                            {
+                                if (message.ID > lastKnownId && !string.IsNullOrEmpty(message.message))
+                                {
+                                    OnDebugMessage($"New message: {message.message.Substring(0, Math.Min(50, message.message.Length))}...");
+                                    OnNewMessageReceived(message.message, channelId, chatName);
+                                    lastMessageIds[channelId] = message.ID;
+                                }
+                            }
+                        }
+                    }
+                    else
+                    {
+                        OnDebugMessage($"Channel/Chat {channelId} not found in dialogs");
                     }
                 }
             }
             catch (Exception ex)
             {
                 OnErrorOccurred($"Error polling channel {channelId}: {ex.Message}");
+                OnDebugMessage($"Channel poll error: {ex}");
             }
+        }
+        protected virtual void OnDebugMessage(string message)
+        {
+            DebugMessage?.Invoke(this, $"[{DateTime.Now:HH:mm:ss}] {message}");
+        }
+
+        protected virtual void OnNewMessageReceived(string message, long channelId, string channelName)
+        {
+            OnDebugMessage($"Message received from {channelName}: {message.Substring(0, Math.Min(100, message.Length))}...");
+            NewMessageReceived?.Invoke(this, (message, channelId, channelName));
+        }
+
+        protected virtual void OnErrorOccurred(string error)
+        {
+            ErrorOccurred?.Invoke(this, error);
         }
 
         /// <summary>
@@ -632,15 +834,9 @@ STEP 7: 📋 Copy the api_id (numbers) and api_hash (long string) below"
         /// <summary>
         /// Event handlers
         /// </summary>
-        protected virtual void OnNewMessageReceived(string message, long channelId, string channelName)
-        {
-            NewMessageReceived?.Invoke(this, (message, channelId, channelName));
-        }
+     
 
-        protected virtual void OnErrorOccurred(string error)
-        {
-            ErrorOccurred?.Invoke(this, error);
-        }
+      
 
         public void Dispose()
         {

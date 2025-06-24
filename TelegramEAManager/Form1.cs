@@ -21,6 +21,12 @@ namespace TelegramEAManager
         private bool isMonitoring = false;
         private System.Windows.Forms.Timer uiUpdateTimer = null!;
         private List<ProcessedSignal> allSignals = new List<ProcessedSignal>();
+        private FileSystemWatcher? signalFileWatcher;
+        private System.Windows.Forms.Timer? cleanupTimer;
+
+        private TextBox? debugConsole;
+
+
         #endregion
 
         public Form1()
@@ -31,6 +37,64 @@ namespace TelegramEAManager
             LoadApplicationSettings();
             SetupTimers();
         }
+        private void StartAutoCleanup()
+        {
+            // Stop existing timer if any
+            cleanupTimer?.Stop();
+            cleanupTimer?.Dispose();
+
+            // Create new cleanup timer (runs every 5 minutes)
+            cleanupTimer = new System.Windows.Forms.Timer
+            {
+                Interval = 300000 // 5 minutes
+            };
+
+            cleanupTimer.Tick += (s, e) =>
+            {
+                try
+                {
+                    signalProcessor.CleanupProcessedSignals();
+                    LogMessage("🧹 Auto-cleanup completed - removed old/processed signals");
+                }
+                catch (Exception ex)
+                {
+                    LogMessage($"❌ Auto-cleanup error: {ex.Message}");
+                }
+            };
+
+            cleanupTimer.Start();
+            LogMessage("🧹 Auto-cleanup started (runs every 5 minutes)");
+        }
+        private void CreateDebugConsole()
+        {
+            // Create a debug window
+            var debugForm = new Form
+            {
+                Text = "🐛 Debug Console - Telegram EA Manager",
+                Size = new Size(800, 400),
+                StartPosition = FormStartPosition.Manual,
+                Location = new Point(this.Right + 10, this.Top),
+                BackColor = Color.Black
+            };
+
+            debugConsole = new TextBox
+            {
+                Dock = DockStyle.Fill,
+                Multiline = true,
+                ScrollBars = ScrollBars.Vertical,
+                BackColor = Color.Black,
+                ForeColor = Color.Lime,
+                Font = new Font("Consolas", 9F),
+                ReadOnly = true
+            };
+
+            debugForm.Controls.Add(debugConsole);
+            debugForm.Show();
+
+            // Keep it on top but not modal
+            debugForm.TopMost = true;
+        }
+
 
         private void InitializeServices()
         {
@@ -40,10 +104,164 @@ namespace TelegramEAManager
             // Subscribe to real-time message events
             telegramService.NewMessageReceived += TelegramService_NewMessageReceived;
             telegramService.ErrorOccurred += TelegramService_ErrorOccurred;
+            telegramService.DebugMessage += TelegramService_DebugMessage; // Add this
 
             // Subscribe to signal processing events
             signalProcessor.SignalProcessed += SignalProcessor_SignalProcessed;
             signalProcessor.ErrorOccurred += SignalProcessor_ErrorOccurred;
+        }
+
+        private void TelegramService_DebugMessage(object? sender, string message)
+        {
+            if (debugConsole != null && !debugConsole.IsDisposed)
+            {
+                if (debugConsole.InvokeRequired)
+                {
+                    debugConsole.Invoke(new Action(() => {
+                        debugConsole.AppendText(message + Environment.NewLine);
+                        // Auto-scroll to bottom
+                        debugConsole.SelectionStart = debugConsole.Text.Length;
+                        debugConsole.ScrollToCaret();
+                    }));
+                }
+                else
+                {
+                    debugConsole.AppendText(message + Environment.NewLine);
+                    debugConsole.SelectionStart = debugConsole.Text.Length;
+                    debugConsole.ScrollToCaret();
+                }
+            }
+
+            // Also log to console
+            Console.WriteLine(message);
+        }
+        private void AddDebugButton(Panel parent)
+        {
+            var btnDebug = new Button
+            {
+                Name = "btnDebug",
+                Text = "🐛 DEBUG",
+                Location = new Point(440, 295),
+                Size = new Size(80, 35),
+                BackColor = Color.FromArgb(239, 68, 68),
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat,
+                Font = new Font("Segoe UI", 9F, FontStyle.Bold)
+            };
+            btnDebug.Click += (s, e) => CreateDebugConsole();
+            parent.Controls.Add(btnDebug);
+        }
+
+
+        private void StartSignalFileMonitoring(string mt4Path)
+        {
+            try
+            {
+                var signalFilePath = Path.Combine(mt4Path, "telegram_signals.txt");
+                var directory = Path.GetDirectoryName(signalFilePath);
+
+                if (!Directory.Exists(directory))
+                {
+                    Directory.CreateDirectory(directory);
+                }
+
+                // Stop existing watcher if any
+                StopSignalFileMonitoring();
+
+                // Create new file watcher
+                signalFileWatcher = new FileSystemWatcher
+                {
+                    Path = directory,
+                    Filter = "telegram_signals.txt",
+                    NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.Size | NotifyFilters.CreationTime
+                };
+
+                signalFileWatcher.Changed += OnSignalFileChanged;
+                signalFileWatcher.Created += OnSignalFileChanged;
+                signalFileWatcher.EnableRaisingEvents = true;
+
+                LogMessage($"📁 Started monitoring signal file: {signalFilePath}");
+            }
+            catch (Exception ex)
+            {
+                LogMessage($"❌ Failed to start file monitoring: {ex.Message}");
+            }
+        }
+
+        private void StopSignalFileMonitoring()
+        {
+            if (signalFileWatcher != null)
+            {
+                signalFileWatcher.EnableRaisingEvents = false;
+                signalFileWatcher.Dispose();
+                signalFileWatcher = null;
+            }
+        }
+
+        private void OnSignalFileChanged(object sender, FileSystemEventArgs e)
+        {
+            try
+            {
+                // Debounce - wait a bit for write to complete
+                Thread.Sleep(100);
+
+                if (this.InvokeRequired)
+                {
+                    this.Invoke(new Action(() => {
+                        LogMessage($"📝 Signal file updated: {e.ChangeType} at {DateTime.Now:HH:mm:ss}");
+                        UpdateFileStatus(e.FullPath);
+                    }));
+                }
+                else
+                {
+                    LogMessage($"📝 Signal file updated: {e.ChangeType} at {DateTime.Now:HH:mm:ss}");
+                    UpdateFileStatus(e.FullPath);
+                }
+            }
+            catch (Exception ex)
+            {
+                LogMessage($"❌ Error monitoring file: {ex.Message}");
+            }
+        }
+
+        private void UpdateFileStatus(string filePath)
+        {
+            try
+            {
+                var fileInfo = new FileInfo(filePath);
+                if (fileInfo.Exists)
+                {
+                    // Read last few lines to show in status
+                    var lines = File.ReadAllLines(filePath);
+                    var lastSignalLine = lines.LastOrDefault(l => !string.IsNullOrWhiteSpace(l) && !l.StartsWith("#"));
+
+                    if (!string.IsNullOrEmpty(lastSignalLine))
+                    {
+                        var parts = lastSignalLine.Split('|');
+                        if (parts.Length >= 11)
+                        {
+                            var timestamp = parts[0];
+                            var channel = parts[2];
+                            var symbol = parts[4];
+                            var direction = parts[3];
+                            var status = parts[10];
+
+                            LogMessage($"📊 Last signal: {symbol} {direction} from {channel} at {timestamp} - Status: {status}");
+                        }
+                    }
+
+                    // Update file info in UI
+                    var lblStats = this.Controls.Find("lblStats", true)[0] as Label;
+                    if (lblStats != null)
+                    {
+                        lblStats.Text = $"📊 Live System | Signals: {allSignals.Count} | File: {fileInfo.Length} bytes | Last update: {fileInfo.LastWriteTime:HH:mm:ss}";
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                LogMessage($"❌ Error reading file status: {ex.Message}");
+            }
         }
 
         private void TelegramService_NewMessageReceived(object? sender, (string message, long channelId, string channelName) e)
@@ -385,7 +603,7 @@ namespace TelegramEAManager
             {
                 Name = "txtSearch",
                 Location = new Point(5, 8),
-                Size = new Size(250, 25),
+                Size = new Size(200, 25),
                 Font = new Font("Segoe UI", 10F),
                 PlaceholderText = "Search channels..."
             };
@@ -395,8 +613,8 @@ namespace TelegramEAManager
             var cmbFilter = new ComboBox
             {
                 Name = "cmbFilter",
-                Location = new Point(265, 8),
-                Size = new Size(120, 25),
+                Location = new Point(210, 8),
+                Size = new Size(100, 25),
                 Font = new Font("Segoe UI", 9F),
                 DropDownStyle = ComboBoxStyle.DropDownList
             };
@@ -409,7 +627,7 @@ namespace TelegramEAManager
             {
                 Name = "btnRefreshChannels",
                 Text = "🔄",
-                Location = new Point(395, 8),
+                Location = new Point(315, 8),
                 Size = new Size(30, 25),
                 BackColor = Color.FromArgb(34, 197, 94),
                 ForeColor = Color.White,
@@ -417,6 +635,24 @@ namespace TelegramEAManager
             };
             btnRefresh.Click += BtnRefreshChannels_Click;
             searchPanel.Controls.Add(btnRefresh);
+
+            // ADD THE QUICK SEARCH BUTTON HERE
+            var btnFindIndicator = new Button
+            {
+                Text = "🔍 Find Indicator",
+                Location = new Point(350, 8),
+                Size = new Size(110, 25),
+                BackColor = Color.FromArgb(59, 130, 246),
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat,
+                Font = new Font("Segoe UI", 8F, FontStyle.Bold)
+            };
+            btnFindIndicator.Click += (s, e) =>
+            {
+                txtSearch.Text = "indicator";
+                SearchAndHighlightChannel("indicator");
+            };
+            searchPanel.Controls.Add(btnFindIndicator);
 
             parent.Controls.Add(searchPanel);
 
@@ -523,13 +759,13 @@ namespace TelegramEAManager
             btnStopMonitoring.Click += BtnStopMonitoring_Click;
             parent.Controls.Add(btnStopMonitoring);
 
-            // UTILITY BUTTONS - SMALLER ROW
+            // UTILITY BUTTONS - FIRST ROW
             var btnCopyChannelIDs = new Button
             {
                 Name = "btnCopyChannelIDs",
                 Text = "📋 COPY IDs",
                 Location = new Point(10, 295),
-                Size = new Size(105, 35),
+                Size = new Size(90, 35),
                 BackColor = Color.FromArgb(168, 85, 247),
                 ForeColor = Color.White,
                 FlatStyle = FlatStyle.Flat,
@@ -544,8 +780,8 @@ namespace TelegramEAManager
             {
                 Name = "btnTestSignal",
                 Text = "🧪 TEST",
-                Location = new Point(125, 295),
-                Size = new Size(85, 35),
+                Location = new Point(105, 295),
+                Size = new Size(70, 35),
                 BackColor = Color.FromArgb(249, 115, 22),
                 ForeColor = Color.White,
                 FlatStyle = FlatStyle.Flat,
@@ -560,8 +796,8 @@ namespace TelegramEAManager
             {
                 Name = "btnGenerateEAConfig",
                 Text = "⚙️ CONFIG",
-                Location = new Point(220, 295),
-                Size = new Size(100, 35),
+                Location = new Point(180, 295),
+                Size = new Size(85, 35),
                 BackColor = Color.FromArgb(59, 130, 246),
                 ForeColor = Color.White,
                 FlatStyle = FlatStyle.Flat,
@@ -571,6 +807,58 @@ namespace TelegramEAManager
             btnGenerateEAConfig.FlatAppearance.BorderSize = 0;
             btnGenerateEAConfig.Click += BtnGenerateEAConfig_Click;
             parent.Controls.Add(btnGenerateEAConfig);
+
+            // ADD THE NEW BUTTONS HERE - SAME ROW
+            var btnClearOldSignals = new Button
+            {
+                Name = "btnClearOldSignals",
+                Text = "🧹 CLEAR",
+                Location = new Point(270, 295),
+                Size = new Size(80, 35),
+                BackColor = Color.FromArgb(107, 114, 128),
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat,
+                Font = new Font("Segoe UI", 9F, FontStyle.Bold),
+                UseVisualStyleBackColor = false
+            };
+            btnClearOldSignals.FlatAppearance.BorderSize = 0;
+            btnClearOldSignals.Click += (s, e) =>
+            {
+                ClearOldSignalsFromFile();
+                MessageBox.Show("✅ Old signals cleared from file!\n\nOnly signals from the last hour are kept.",
+                               "File Cleaned", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            };
+            parent.Controls.Add(btnClearOldSignals);
+
+            var btnCheckFile = new Button
+            {
+                Name = "btnCheckFile",
+                Text = "📂 CHECK",
+                Location = new Point(355, 295),
+                Size = new Size(80, 35),
+                BackColor = Color.FromArgb(75, 85, 99),
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat,
+                Font = new Font("Segoe UI", 9F, FontStyle.Bold),
+                UseVisualStyleBackColor = false
+            };
+            btnCheckFile.FlatAppearance.BorderSize = 0;
+            btnCheckFile.Click += (s, e) => CheckSignalFile();
+            parent.Controls.Add(btnCheckFile);
+
+            var btnDebug = new Button
+            {
+                Name = "btnDebug",
+                Text = "🐛 DEBUG",
+                Location = new Point(440, 295),
+                Size = new Size(80, 35),
+                BackColor = Color.FromArgb(239, 68, 68),
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat,
+                Font = new Font("Segoe UI", 9F, FontStyle.Bold)
+            };
+            btnDebug.Click += (s, e) => CreateDebugConsole();
+            parent.Controls.Add(btnDebug);
 
             // LIVE SIGNALS SECTION
             var lblLiveSignals = new Label
@@ -596,7 +884,7 @@ namespace TelegramEAManager
                 BackColor = Color.White
             };
 
-            lvLiveSignals.Columns.Add("Now", 60);
+            lvLiveSignals.Columns.Add("Time", 60);
             lvLiveSignals.Columns.Add("Channel", 100);
             lvLiveSignals.Columns.Add("Symbol", 60);
             lvLiveSignals.Columns.Add("Direction", 50);
@@ -720,6 +1008,32 @@ namespace TelegramEAManager
             var cmbPhone = this.Controls.Find("cmbPhone", true)[0] as ComboBox;
             var phoneNumber = cmbPhone?.Text?.Trim() ?? "";
 
+            // Check if already connected
+            bool isAlreadyConnected = telegramService.IsUserAuthorized();
+
+            if (isAlreadyConnected && !string.IsNullOrEmpty(phoneNumber))
+            {
+                // Already connected - just reload channels
+                var result = MessageBox.Show("✅ Already connected to Telegram!\n\n🔄 Do you want to reload channels?\n\n" +
+                                           "Click YES to refresh channel list\n" +
+                                           "Click NO to reconnect with different account",
+                                           "Already Connected",
+                                           MessageBoxButtons.YesNoCancel,
+                                           MessageBoxIcon.Question);
+
+                if (result == DialogResult.Yes)
+                {
+                    // Just reload channels
+                    await ReloadChannels();
+                    return;
+                }
+                else if (result == DialogResult.Cancel)
+                {
+                    return;
+                }
+                // If No, continue with reconnection process
+            }
+
             if (string.IsNullOrEmpty(phoneNumber))
             {
                 ShowMessage("❌ Please enter your phone number", "Phone Required", MessageBoxIcon.Warning);
@@ -749,10 +1063,14 @@ namespace TelegramEAManager
                 if (connected)
                 {
                     await LoadChannelsAfterAuth(phoneNumber);
-                    ShowMessage("✅ Successfully connected to Telegram!\n\n📱 Phone: " + phoneNumber +
-                               "\n🕒 Now: " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + " UTC" +
-                               "\n👤 User: islamahmed9717",
-                               "Connection Successful", MessageBoxIcon.Information);
+
+                    if (!isAlreadyConnected)
+                    {
+                        ShowMessage("✅ Successfully connected to Telegram!\n\n📱 Phone: " + phoneNumber +
+                                   "\n🕒 Time: " + DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss") + " UTC" +
+                                   "\n👤 User: islamahmed9717",
+                                   "Connection Successful", MessageBoxIcon.Information);
+                    }
                 }
                 else
                 {
@@ -761,7 +1079,7 @@ namespace TelegramEAManager
             }
             catch (Exception ex)
             {
-                ShowMessage($"❌ Connection failed:\n\n{ex.Message}\n\n🕒 Now: {DateTime.Now:yyyy-MM-dd HH:mm:ss} UTC\n👤 User: islamahmed9717",
+                ShowMessage($"❌ Connection failed:\n\n{ex.Message}\n\n🕒 Time: {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss} UTC\n👤 User: islamahmed9717",
                            "Connection Error", MessageBoxIcon.Error);
                 UpdateStatus(false, false);
             }
@@ -775,6 +1093,75 @@ namespace TelegramEAManager
             }
         }
 
+        // Add this new method to handle channel reloading
+        private async Task ReloadChannels()
+        {
+            var btnConnect = this.Controls.Find("btnConnect", true)[0] as Button;
+            var btnRefresh = this.Controls.Find("btnRefreshChannels", true)[0] as Button;
+
+            if (btnConnect != null)
+            {
+                btnConnect.Text = "🔄 RELOADING...";
+                btnConnect.Enabled = false;
+            }
+
+            if (btnRefresh != null)
+            {
+                btnRefresh.Enabled = false;
+                btnRefresh.Text = "⏳";
+            }
+
+            try
+            {
+                LogMessage("🔄 Reloading channels from Telegram...");
+
+                // Clear current channel lists
+                allChannels.Clear();
+                var lvChannels = this.Controls.Find("lvChannels", true)[0] as ListView;
+                if (lvChannels != null)
+                {
+                    lvChannels.Items.Clear();
+                }
+
+                // Get fresh channel list
+                var channels = await telegramService.GetChannelsAsync();
+                allChannels = channels;
+
+                // Update the UI
+                UpdateChannelsList(channels);
+
+                LogMessage($"✅ Channels reloaded successfully - Found {channels.Count} channels");
+
+                ShowMessage($"✅ Channels reloaded successfully!\n\n" +
+                           $"📢 Found {channels.Count} channels\n" +
+                           $"🕒 Time: {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss} UTC\n" +
+                           $"👤 User: islamahmed9717\n\n" +
+                           $"💡 Look for 'Indicator Signals' in the list",
+                           "Channels Reloaded", MessageBoxIcon.Information);
+            }
+            catch (Exception ex)
+            {
+                ShowMessage($"❌ Failed to reload channels:\n\n{ex.Message}",
+                           "Reload Error", MessageBoxIcon.Error);
+                LogMessage($"❌ Channel reload failed: {ex.Message}");
+            }
+            finally
+            {
+                if (btnConnect != null)
+                {
+                    btnConnect.Text = "🔗 CONNECT";
+                    btnConnect.Enabled = true;
+                }
+
+                if (btnRefresh != null)
+                {
+                    btnRefresh.Enabled = true;
+                    btnRefresh.Text = "🔄";
+                }
+            }
+        }
+
+      
         private async Task LoadChannelsAfterAuth(string phoneNumber)
         {
             try
@@ -943,11 +1330,20 @@ namespace TelegramEAManager
 
             try
             {
-                // Update EA settings with current MT4 path
+                // Clean up old signals first
+                signalProcessor.CleanupProcessedSignals();
+
+                // Update EA settings
                 var currentSettings = signalProcessor.GetEASettings();
                 currentSettings.MT4FilesPath = mt4Path;
-                currentSettings.SignalFilePath = "telegram_signals.txt"; // FIXED: Use correct filename
+                currentSettings.SignalFilePath = "telegram_signals.txt";
                 signalProcessor.UpdateEASettings(currentSettings);
+
+                // Start auto-cleanup
+                StartAutoCleanup();
+
+                // Start file monitoring
+                StartSignalFileMonitoring(mt4Path);
 
                 // Start real Telegram monitoring
                 telegramService.StartMonitoring(selectedChannels);
@@ -967,8 +1363,9 @@ namespace TelegramEAManager
                 ShowMessage($"✅ Monitoring started successfully!\n\n" +
                            $"📊 Monitoring {selectedChannels.Count} channels\n" +
                            $"📁 Signals saved to: {mt4Path}\\telegram_signals.txt\n" +
-                           $"🔄 Real-time message processing active\n\n" +
-                           $"⚠️ Keep this application running to receive signals!",
+                           $"🔄 Real-time message processing active\n" +
+                           $"🧹 Auto-cleanup enabled (every 5 minutes)\n\n" +
+                           $"⚠️ Keep this application running!",
                            "Monitoring Started", MessageBoxIcon.Information);
             }
             catch (Exception ex)
@@ -976,11 +1373,18 @@ namespace TelegramEAManager
                 ShowMessage($"❌ Failed to start monitoring:\n\n{ex.Message}", "Monitoring Error", MessageBoxIcon.Error);
             }
         }
-
         private void BtnStopMonitoring_Click(object? sender, EventArgs e)
         {
             try
             {
+                // Stop cleanup timer
+                cleanupTimer?.Stop();
+                cleanupTimer?.Dispose();
+                cleanupTimer = null;
+
+                // Stop file monitoring
+                StopSignalFileMonitoring();
+
                 // Stop Telegram monitoring
                 telegramService.StopMonitoring();
 
@@ -1002,7 +1406,6 @@ namespace TelegramEAManager
                 ShowMessage($"❌ Error stopping monitoring:\n\n{ex.Message}", "Error", MessageBoxIcon.Error);
             }
         }
-
 
         private void BtnCopyChannelIDs_Click(object? sender, EventArgs e)
         {
@@ -1041,43 +1444,84 @@ namespace TelegramEAManager
 
             try
             {
-                // Create test message that will be parsed by the signal processor
-                var testMessage = @"🚀 TRADING SIGNAL 🚀
+                // Update EA settings with current MT4 path
+                var currentSettings = signalProcessor.GetEASettings();
+                currentSettings.MT4FilesPath = mt4Path;
+                currentSettings.SignalFilePath = "telegram_signals.txt";
+                signalProcessor.UpdateEASettings(currentSettings);
 
-BUY EURUSD NOW
+                // Create different test signals each time
+                var testScenarios = new[]
+                {
+            // EURUSD Buy
+            @"🚀 FOREX SIGNAL 🚀
+BUY EURUSD @ 1.0890
+SL: 1.0860
+TP1: 1.0920
+TP2: 1.0950
+TP3: 1.0980",
 
-📊 Entry: Market Price
-🛑 SL: 1.0850
-🎯 TP1: 1.0920
-🎯 TP2: 1.0950
-🎯 TP3: 1.0980
+            // GBPUSD Sell
+            @"📊 TRADING ALERT 📊
+SELL GBPUSD NOW
+Stop Loss: 1.2650
+Take Profit 1: 1.2600
+Take Profit 2: 1.2550",
 
-Good luck traders! 💰";
+            // GOLD Buy
+            @"🏆 GOLD SIGNAL 🏆
+BUY GOLD (XAUUSD)
+Entry: Market Price
+SL: 1945.00
+TP: 1965.00",
 
-                // Process the test message through the real signal processor
+            // USDJPY Buy
+            @"💹 SIGNAL TIME 💹
+USDJPY BUY NOW
+SL 148.50
+TP 149.50"
+        };
+
+                // Rotate through different test signals
+                var random = new Random();
+                var testMessage = testScenarios[random.Next(testScenarios.Length)];
+
+                // Process the test message
                 var processedSignal = signalProcessor.ProcessTelegramMessage(testMessage, 999999, "TEST_CHANNEL");
 
                 // Add to signals history and UI
                 allSignals.Add(processedSignal);
                 AddToLiveSignals(processedSignal);
 
+                // Verify file was written
                 var signalFilePath = Path.Combine(mt4Path, "telegram_signals.txt");
-                var fileInfo = new FileInfo(signalFilePath);
+                var fileWritten = File.Exists(signalFilePath);
+                var fileSize = fileWritten ? new FileInfo(signalFilePath).Length : 0;
 
-                ShowMessage($"🧪 Test signal processed successfully!\n\n" +
-                           $"📊 Signal Details:\n{testMessage}\n\n" +
-                           $"📁 File: {signalFilePath}\n" +
-                           $"📝 Status: {processedSignal.Status}\n" +
-                           $"📏 File Size: {(fileInfo.Exists ? fileInfo.Length : 0)} bytes\n" +
-                           $"🕒 Processed at: {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss} UTC\n\n" +
-                           $"⚙️ Check your EA Expert tab now!\n" +
-                           $"👤 User: islamahmed9717",
-                           "Test Signal Processed", MessageBoxIcon.Information);
+                // Read last line from file to verify
+                string lastLine = "";
+                if (fileWritten)
+                {
+                    var lines = File.ReadAllLines(signalFilePath);
+                    // Update the ShowMessage method call to match the existing overloads
+                    ShowMessage($"🧪 TEST SIGNAL RESULTS:\n\n" +
+                                $"✅ Signal Type: {processedSignal.ParsedData?.Symbol} {processedSignal.ParsedData?.Direction}\n" +
+                                $"📝 Status: {processedSignal.Status}\n" +
+                                $"📁 File Written: {(fileWritten ? "YES ✅" : "NO ❌")}\n" +
+                                $"📏 File Size: {fileSize} bytes\n" +
+                                $"🕒 Timestamp: {DateTime.UtcNow:yyyy.MM.dd HH:mm:ss} UTC\n\n" +
+                                $"📄 Last Line in File:\n{lastLine}\n\n" +
+                                $"💡 Now check your EA - it should process this signal immediately!",
+                                "Test Signal Complete",
+                                MessageBoxIcon.Information);
+                    lastLine = lines.LastOrDefault(l => !string.IsNullOrWhiteSpace(l) && !l.StartsWith("#")) ?? "";
+                }
+
+              
             }
             catch (Exception ex)
             {
-                ShowMessage($"❌ Failed to process test signal:\n\n{ex.Message}\n\nStack Trace:\n{ex.StackTrace}",
-                           "Test Failed", MessageBoxIcon.Error);
+                ShowMessage($"❌ Failed to process test signal:\n\n{ex.Message}", "Test Failed", MessageBoxIcon.Error);
             }
         }
 
@@ -1156,31 +1600,146 @@ Good luck traders! 💰";
                 return;
             }
 
-            var btnRefresh = sender as Button;
-            if (btnRefresh != null)
-            {
-                btnRefresh.Enabled = false;
-                btnRefresh.Text = "⏳";
-            }
+            await ReloadChannels();
+        }
 
-            try
+        // Add this method to Form1.cs
+        private void SearchAndHighlightChannel(string searchTerm)
+        {
+            var lvChannels = this.Controls.Find("lvChannels", true)[0] as ListView;
+            if (lvChannels == null) return;
+
+            searchTerm = searchTerm.ToLower();
+            bool found = false;
+
+            foreach (ListViewItem item in lvChannels.Items)
             {
-                var channels = await telegramService.GetChannelsAsync();
-                allChannels = channels;
-                RefreshChannelsList();
-            }
-            catch (Exception ex)
-            {
-                ShowMessage($"❌ Failed to refresh channels:\n\n{ex.Message}", "Refresh Error", MessageBoxIcon.Error);
-            }
-            finally
-            {
-                if (btnRefresh != null)
+                var channel = item.Tag as ChannelInfo;
+                if (channel == null) continue;
+
+                string channelTitle = channel.Title.ToLower();
+                string channelUsername = channel.Username?.ToLower() ?? "";
+
+                if (channelTitle.Contains(searchTerm) || channelUsername.Contains(searchTerm))
                 {
-                    btnRefresh.Enabled = true;
-                    btnRefresh.Text = "🔄";
+                    // Highlight the found channel
+                    item.BackColor = Color.FromArgb(255, 255, 100); // Bright yellow
+                    item.Font = new Font(item.Font, FontStyle.Bold);
+
+                    if (!found)
+                    {
+                        // Ensure it's visible and select it
+                        item.EnsureVisible();
+                        item.Selected = true;
+                        found = true;
+                    }
+                }
+                else
+                {
+                    // Reset highlighting for non-matching items
+                    item.Font = new Font("Segoe UI", 9F);
+                    // Restore original color based on type
+                    RestoreChannelItemColor(item, channel);
                 }
             }
+
+            if (!found)
+            {
+                LogMessage($"⚠️ Channel containing '{searchTerm}' not found. Try reloading channels.");
+            }
+            else
+            {
+                LogMessage($"✅ Found and highlighted channels containing '{searchTerm}'");
+            }
+        }
+
+        private void RestoreChannelItemColor(ListViewItem item, ChannelInfo channel)
+        {
+            // Restore original color coding based on type
+            switch (channel.Type.ToLower())
+            {
+                case "vip":
+                    item.BackColor = Color.FromArgb(255, 235, 59); // Yellow
+                    break;
+                case "premium":
+                    item.BackColor = Color.FromArgb(156, 39, 176); // Purple
+                    item.ForeColor = Color.White;
+                    break;
+                case "signals":
+                    item.BackColor = Color.FromArgb(76, 175, 80); // Green
+                    item.ForeColor = Color.White;
+                    break;
+                case "gold":
+                    item.BackColor = Color.FromArgb(255, 193, 7); // Gold
+                    break;
+                case "crypto":
+                    item.BackColor = Color.FromArgb(255, 87, 34); // Orange
+                    item.ForeColor = Color.White;
+                    break;
+                default:
+                    item.BackColor = Color.FromArgb(200, 230, 255); // Light blue
+                    item.ForeColor = Color.Black;
+                    break;
+            }
+        }
+
+        // Update the TxtSearch_TextChanged event handler
+        private void TxtSearch_TextChanged(object? sender, EventArgs e)
+        {
+            var txtSearch = sender as TextBox;
+            if (txtSearch == null) return;
+
+            string searchText = txtSearch.Text.Trim();
+
+            if (!string.IsNullOrEmpty(searchText))
+            {
+                // Highlight matching channels
+                SearchAndHighlightChannel(searchText);
+            }
+            else
+            {
+                // Clear highlighting when search is empty
+                var lvChannels = this.Controls.Find("lvChannels", true)[0] as ListView;
+                if (lvChannels != null)
+                {
+                    foreach (ListViewItem item in lvChannels.Items)
+                    {
+                        var channel = item.Tag as ChannelInfo;
+                        if (channel != null)
+                        {
+                            RestoreChannelItemColor(item, channel);
+                            item.Font = new Font("Segoe UI", 9F);
+                        }
+                    }
+                }
+            }
+
+            ApplyChannelFilters();
+        }
+
+        // Add a quick search button specifically for "Indicator Signals"
+        private void AddQuickSearchButton(Panel parent)
+        {
+            var btnFindIndicator = new Button
+            {
+                Text = "🔍 Find Indicator Signals",
+                Location = new Point(435, 8),
+                Size = new Size(150, 25),
+                BackColor = Color.FromArgb(59, 130, 246),
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat,
+                Font = new Font("Segoe UI", 9F)
+            };
+            btnFindIndicator.Click += (s, e) =>
+            {
+                var txtSearch = this.Controls.Find("txtSearch", true)[0] as TextBox;
+                if (txtSearch != null)
+                {
+                    txtSearch.Text = "indicator";
+                    SearchAndHighlightChannel("indicator");
+                }
+            };
+            parent.Controls.Add(btnFindIndicator);
         }
 
         private void BtnHistory_Click(object? sender, EventArgs e)
@@ -1199,11 +1758,6 @@ Good luck traders! 💰";
             ShowMessage("🗺️ Symbol Mapping feature will be implemented!\n\nThis will allow you to:\n• Map Telegram symbols to MT4/MT5\n• Set symbol prefixes/suffixes\n• Configure exclusions\n\n🚀 Coming soon!", "Symbol Mapping", MessageBoxIcon.Information);
         }
 
-        private void TxtSearch_TextChanged(object? sender, EventArgs e)
-        {
-            ApplyChannelFilters();
-        }
-
         private void CmbFilter_SelectedIndexChanged(object? sender, EventArgs e)
         {
             ApplyChannelFilters();
@@ -1211,11 +1765,13 @@ Good luck traders! 💰";
 
         private void UiUpdateTimer_Tick(object? sender, EventArgs e)
         {
-            // Update time in subtitle
+            // Update time in subtitle showing both UTC and local
             var lblSubtitle = this.Controls.Find("lblSubtitle", true).FirstOrDefault() as Label;
             if (lblSubtitle != null)
             {
-                lblSubtitle.Text = $"🕒 Current Now (UTC): {DateTime.Now:yyyy-MM-dd HH:mm:ss} | User: islamahmed9717";
+                var utcTime = DateTime.UtcNow;
+                var localTime = DateTime.Now;
+                lblSubtitle.Text = $"🕒 UTC: {utcTime:yyyy-MM-dd HH:mm:ss} | Local: {localTime:HH:mm:ss} | User: islamahmed9717";
             }
 
             // Update time in status bar
@@ -1227,8 +1783,7 @@ Good luck traders! 💰";
                     {
                         if (item.Name == "statusLabel")
                         {
-                            item.Text = $"Real-time System Active | UTC: {DateTime.Now:yyyy-MM-dd HH:mm:ss} | User: islamahmed9717";
-
+                            item.Text = $"Real-time System Active | UTC: {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss} | Local: {DateTime.Now:HH:mm:ss}";
                         }
                     }
                 }
@@ -1236,6 +1791,172 @@ Good luck traders! 💰";
 
             // Update signals count
             UpdateSignalsCount();
+        }
+        private void ClearOldSignalsFromFile()
+        {
+            var txtMT4Path = this.Controls.Find("txtMT4Path", true)[0] as TextBox;
+            var mt4Path = txtMT4Path?.Text?.Trim() ?? "";
+
+            if (string.IsNullOrEmpty(mt4Path) || !Directory.Exists(mt4Path))
+                return;
+
+            try
+            {
+                var signalFilePath = Path.Combine(mt4Path, "telegram_signals.txt");
+
+                if (File.Exists(signalFilePath))
+                {
+                    // Read all lines
+                    var lines = File.ReadAllLines(signalFilePath).ToList();
+                    var newLines = new List<string>();
+
+                    // Keep header lines (those starting with #)
+                    foreach (var line in lines)
+                    {
+                        if (line.StartsWith("#") || string.IsNullOrWhiteSpace(line))
+                        {
+                            newLines.Add(line);
+                        }
+                        else
+                        {
+                            // Parse signal line to check age
+                            var parts = line.Split('|');
+                            if (parts.Length >= 11)
+                            {
+                                var timestampStr = parts[0];
+                                if (DateTime.TryParse(timestampStr, out DateTime signalTime))
+                                {
+                                    // Keep only signals from last hour
+                                    var ageMinutes = (DateTime.UtcNow - signalTime).TotalMinutes;
+                                    if (ageMinutes <= 60) // Keep signals less than 60 minutes old
+                                    {
+                                        newLines.Add(line);
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Write back cleaned file
+                    File.WriteAllLines(signalFilePath, newLines);
+
+                    LogMessage($"🧹 Cleaned signal file - removed old signals");
+                }
+            }
+            catch (Exception ex)
+            {
+                LogMessage($"❌ Error cleaning signal file: {ex.Message}");
+            }
+        }
+
+        // Add a button to clear old signals
+        private void AddClearSignalsButton(Panel parent)
+        {
+            var btnClearOldSignals = new Button
+            {
+                Name = "btnClearOldSignals",
+                Text = "🧹 CLEAR OLD",
+                Location = new Point(330, 295),
+                Size = new Size(100, 35),
+                BackColor = Color.FromArgb(107, 114, 128),
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat,
+                Font = new Font("Segoe UI", 9F, FontStyle.Bold)
+            };
+            btnClearOldSignals.Click += (s, e) =>
+            {
+                ClearOldSignalsFromFile();
+                MessageBox.Show("✅ Old signals cleared from file!\n\nOnly signals from the last hour are kept.",
+                               "File Cleaned", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            };
+            parent.Controls.Add(btnClearOldSignals);
+        }
+
+        private void AddCheckFileButton(Panel parent)
+        {
+            var btnCheckFile = new Button
+            {
+                Name = "btnCheckFile",
+                Text = "📂 CHECK FILE",
+                Location = new Point(440, 295),
+                Size = new Size(100, 35),
+                BackColor = Color.FromArgb(75, 85, 99),
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat,
+                Font = new Font("Segoe UI", 9F, FontStyle.Bold)
+            };
+            btnCheckFile.Click += (s, e) =>
+            {
+                CheckSignalFile();
+            };
+            parent.Controls.Add(btnCheckFile);
+        }
+
+        private void CheckSignalFile()
+        {
+            var txtMT4Path = this.Controls.Find("txtMT4Path", true)[0] as TextBox;
+            var mt4Path = txtMT4Path?.Text?.Trim() ?? "";
+
+            if (string.IsNullOrEmpty(mt4Path))
+            {
+                ShowMessage("❌ Please set MT4/MT5 path first!", "No Path", MessageBoxIcon.Warning);
+                return;
+            }
+
+            var signalFilePath = Path.Combine(mt4Path, "telegram_signals.txt");
+
+            if (!File.Exists(signalFilePath))
+            {
+                ShowMessage($"❌ Signal file not found!\n\n{signalFilePath}", "File Not Found", MessageBoxIcon.Warning);
+                return;
+            }
+
+            try
+            {
+                var lines = File.ReadAllLines(signalFilePath);
+                var signalLines = lines.Where(l => !string.IsNullOrWhiteSpace(l) && !l.StartsWith("#")).ToList();
+
+                var fileInfo = new FileInfo(signalFilePath);
+
+                var report = $"📁 SIGNAL FILE REPORT:\n\n" +
+                            $"📍 Path: {signalFilePath}\n" +
+                            $"📏 Size: {fileInfo.Length} bytes\n" +
+                            $"🕒 Last Modified: {fileInfo.LastWriteTime:yyyy-MM-dd HH:mm:ss}\n" +
+                            $"📊 Total Lines: {lines.Length}\n" +
+                            $"📈 Signal Lines: {signalLines.Count}\n\n";
+
+                if (signalLines.Count > 0)
+                {
+                    report += "📋 LAST 5 SIGNALS:\n\n";
+                    var lastSignals = signalLines.TakeLast(5).Reverse();
+
+                    foreach (var line in lastSignals)
+                    {
+                        var parts = line.Split('|');
+                        if (parts.Length >= 5)
+                        {
+                            report += $"• {parts[0]} - {parts[4]} {parts[3]} from {parts[2]}\n";
+                        }
+                    }
+                }
+                else
+                {
+                    report += "⚠️ No signals found in file!";
+                }
+
+                ShowMessage(report, "Signal File Status", MessageBoxIcon.Information);
+
+                // Also open the file in notepad for direct viewing
+                try
+                {
+                    System.Diagnostics.Process.Start("notepad.exe", signalFilePath);
+                }
+                catch { }
+            }
+            catch (Exception ex)
+            {
+                ShowMessage($"❌ Error reading file:\n\n{ex.Message}", "Error", MessageBoxIcon.Error);
+            }
         }
         #endregion
 
@@ -1331,7 +2052,10 @@ Good luck traders! 💰";
             var lvLiveSignals = this.Controls.Find("lvLiveSignals", true)[0] as ListView;
             if (lvLiveSignals == null) return;
 
-            var item = new ListViewItem(signal.DateTime.ToString("HH:mm:ss"));
+            // Convert UTC to local time for display
+            var localTime = signal.DateTime.ToLocalTime();
+
+            var item = new ListViewItem(localTime.ToString("HH:mm:ss")); // Show local time in UI
             item.SubItems.Add(signal.ChannelName);
             item.SubItems.Add(signal.ParsedData?.Symbol ?? "N/A");
             item.SubItems.Add(signal.ParsedData?.Direction ?? "N/A");
