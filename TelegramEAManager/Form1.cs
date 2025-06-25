@@ -1037,6 +1037,7 @@ namespace TelegramEAManager
             btnDebug.Click += (s, e) => CreateDebugConsole();
             parent.Controls.Add(btnDebug);
 
+
             // LIVE SIGNALS SECTION
             var lblLiveSignals = new Label
             {
@@ -2488,6 +2489,75 @@ System: Windows Forms .NET 9.0 with WTelegramClient
         private void ShowMessage(string message, string title, MessageBoxIcon icon)
         {
             MessageBox.Show(message, title, MessageBoxButtons.OK, icon);
+        }
+        private void DebugSignalFile()
+        {
+            var txtMT4Path = this.Controls.Find("txtMT4Path", true)[0] as TextBox;
+            var mt4Path = txtMT4Path?.Text?.Trim() ?? "";
+
+            if (string.IsNullOrEmpty(mt4Path))
+            {
+                LogMessage("❌ MT4 path not set!");
+                return;
+            }
+
+            var signalFilePath = Path.Combine(mt4Path, "telegram_signals.txt");
+
+            try
+            {
+                if (File.Exists(signalFilePath))
+                {
+                    // Read file content
+                    var lines = File.ReadAllLines(signalFilePath);
+                    LogMessage($"📁 Signal file contains {lines.Length} lines");
+
+                    // Show last 5 signals
+                    var signalLines = lines.Where(l => !string.IsNullOrWhiteSpace(l) && !l.StartsWith("#")).TakeLast(5);
+
+                    foreach (var line in signalLines)
+                    {
+                        LogMessage($"📊 Signal: {line}");
+
+                        // Parse and show status
+                        var parts = line.Split('|');
+                        if (parts.Length >= 11)
+                        {
+                            var timestamp = parts[0];
+                            var status = parts[10];
+                            LogMessage($"   ⏰ Time: {timestamp}, Status: {status}");
+                        }
+                    }
+
+                    // Check file permissions
+                    var fileInfo = new FileInfo(signalFilePath);
+                    LogMessage($"📋 File info: Size={fileInfo.Length} bytes, LastWrite={fileInfo.LastWriteTime:yyyy-MM-dd HH:mm:ss}");
+                }
+                else
+                {
+                    LogMessage($"❌ Signal file not found: {signalFilePath}");
+                }
+            }
+            catch (Exception ex)
+            {
+                LogMessage($"❌ Error reading signal file: {ex.Message}");
+            }
+
+        }
+        private void AddDebugFileButton(Panel parent)
+        {
+            var btnDebugFile = new Button
+            {
+                Name = "btnDebugFile",
+                Text = "🔍 DEBUG FILE",
+                Location = new Point(550, 295),
+                Size = new Size(100, 35),
+                BackColor = Color.FromArgb(139, 92, 246),
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat,
+                Font = new Font("Segoe UI", 9F, FontStyle.Bold)
+            };
+            btnDebugFile.Click += (s, e) => DebugSignalFile();
+            parent.Controls.Add(btnDebugFile);
         }
 
         private void LoadApplicationSettings()

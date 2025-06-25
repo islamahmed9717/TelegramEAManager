@@ -468,12 +468,12 @@ namespace TelegramEAManager
 
                             // Append the new signal
                             using (var fs = new FileStream(
-                                filePath,
-                                FileMode.Append,
-                                FileAccess.Write,
-                                FileShare.Read,
-                                4096,
-                                FileOptions.WriteThrough))
+                                 filePath,
+                                 FileMode.Append,
+                                 FileAccess.Write,
+                                 FileShare.ReadWrite,  // Allow both read and write sharing
+                                 4096,
+                                 FileOptions.WriteThrough))
                             using (var writer = new StreamWriter(fs, System.Text.Encoding.UTF8) { AutoFlush = true })
                             {
                                 writer.WriteLine(signalText);
