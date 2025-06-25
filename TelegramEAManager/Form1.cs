@@ -969,6 +969,22 @@ namespace TelegramEAManager
             btnTestSignal.Click += BtnTestSignal_Click;
             parent.Controls.Add(btnTestSignal);
 
+            var btnTestID = new Button
+            {
+                Name = "btnTestID",
+                Text = "🔑 TEST ID",
+                Location = new Point(520, 295),  // Adjust position as needed
+                Size = new Size(80, 35),
+                BackColor = Color.FromArgb(139, 92, 246),  // Purple color
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat,
+                Font = new Font("Segoe UI", 9F, FontStyle.Bold),
+                UseVisualStyleBackColor = false
+            };
+            btnTestID.FlatAppearance.BorderSize = 0;
+            btnTestID.Click += (s, e) => TestSignalIDMatching();
+            parent.Controls.Add(btnTestID);
+
             var btnGenerateEAConfig = new Button
             {
                 Name = "btnGenerateEAConfig",
@@ -1151,6 +1167,7 @@ namespace TelegramEAManager
             parent.Controls.Add(btnSymbolMapping);
         }
 
+
         private void CreateStatusBar()
         {
             var statusStrip = new StatusStrip
@@ -1179,6 +1196,92 @@ namespace TelegramEAManager
             this.Controls.Add(statusStrip);
         }
         #endregion
+
+        private void TestSignalIDMatching()
+        {
+            try
+            {
+                // Make sure MT4 path is set
+                var txtMT4Path = this.Controls.Find("txtMT4Path", true)[0] as TextBox;
+                var mt4Path = txtMT4Path?.Text?.Trim() ?? "";
+
+                if (string.IsNullOrEmpty(mt4Path) || !Directory.Exists(mt4Path))
+                {
+                    MessageBox.Show("❌ Please set a valid MT4/MT5 Files folder path first!", "Invalid Path", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+
+                // Update EA settings with current MT4 path
+                var currentSettings = signalProcessor.GetEASettings();
+                currentSettings.MT4FilesPath = mt4Path;
+                currentSettings.SignalFilePath = "telegram_signals.txt";
+                signalProcessor.UpdateEASettings(currentSettings);
+
+                // Create a test signal with known values
+                var testTime = DateTime.UtcNow; // Use current UTC time
+                var testMessage = @"🧪 TEST SIGNAL 🧪
+BUY EURUSD NOW
+SL: 1.0800
+TP1: 1.0900
+TP2: 1.0950";
+
+                // Process the test message through the signal processor
+                var processedSignal = signalProcessor.ProcessTelegramMessage(
+                    testMessage,
+                    123456789,  // Test channel ID
+                    "TEST_CHANNEL"
+                );
+
+                // Show results
+                string resultMessage = $"🧪 TEST SIGNAL RESULTS:\n\n" +
+                                     $"✅ Signal ID: {processedSignal.Id}\n" +
+                                     $"📊 Symbol: {processedSignal.ParsedData?.Symbol} → {processedSignal.ParsedData?.FinalSymbol}\n" +
+                                     $"📈 Direction: {processedSignal.ParsedData?.Direction}\n" +
+                                     $"📝 Status: {processedSignal.Status}\n" +
+                                     $"🕒 Time: {processedSignal.DateTime:yyyy-MM-dd HH:mm:ss} UTC\n\n";
+
+                // Check if file was written
+                var signalFilePath = Path.Combine(mt4Path, "telegram_signals.txt");
+                if (File.Exists(signalFilePath))
+                {
+                    var lines = File.ReadAllLines(signalFilePath);
+                    var testLine = lines.LastOrDefault(l => l.Contains(processedSignal.Id));
+
+                    if (!string.IsNullOrEmpty(testLine))
+                    {
+                        resultMessage += $"✅ Signal written to file successfully!\n\n" +
+                                       $"📄 File line:\n{testLine}\n\n" +
+                                       $"💡 Check if your EA processes this signal with ID: {processedSignal.Id}";
+                    }
+                    else
+                    {
+                        resultMessage += "❌ Signal not found in file!";
+                    }
+                }
+                else
+                {
+                    resultMessage += "❌ Signal file not found!";
+                }
+
+                MessageBox.Show(resultMessage, "Signal ID Test Results", MessageBoxButtons.OK, MessageBoxIcon.Information);
+
+                // Also add to live signals display
+                AddToLiveSignals(processedSignal);
+                allSignals.Add(processedSignal);
+
+                LogMessage($"🧪 Test completed - Signal ID: {processedSignal.Id}");
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"❌ Test failed:\n\n{ex.Message}", "Test Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        // Add this button click handler to trigger the test
+        private void BtnTestIDMatching_Click(object sender, EventArgs e)
+        {
+            TestSignalIDMatching();
+        }
 
         #region Event Handlers
         private async void BtnConnect_Click(object? sender, EventArgs e)
