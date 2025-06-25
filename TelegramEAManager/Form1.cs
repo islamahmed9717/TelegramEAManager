@@ -24,9 +24,11 @@ namespace TelegramEAManager
         private FileSystemWatcher? signalFileWatcher;
         private System.Windows.Forms.Timer? cleanupTimer;
 
-        private TextBox? debugConsole;
+        private Form? debugForm = null;
+        private TextBox? debugConsole = null;
+        private readonly object debugLock = new object();
 
-
+    
         #endregion
 
         public Form1()
@@ -67,34 +69,167 @@ namespace TelegramEAManager
         }
         private void CreateDebugConsole()
         {
-            // Create a debug window
-            var debugForm = new Form
+            lock (debugLock)
             {
-                Text = "🐛 Debug Console - Telegram EA Manager",
-                Size = new Size(800, 400),
-                StartPosition = FormStartPosition.Manual,
-                Location = new Point(this.Right + 10, this.Top),
-                BackColor = Color.Black
-            };
+                // Check if debug console already exists
+                if (debugForm != null && !debugForm.IsDisposed)
+                {
+                    debugForm.Focus();
+                    debugForm.WindowState = FormWindowState.Normal;
+                    return;
+                }
 
-            debugConsole = new TextBox
+                // Create new debug window
+                debugForm = new Form
+                {
+                    Text = "🐛 Debug Console - Telegram EA Manager",
+                    Size = new Size(800, 400),
+                    StartPosition = FormStartPosition.Manual,
+                    Location = new Point(this.Right + 10, this.Top),
+                    BackColor = Color.Black,
+                    Icon = this.Icon
+                };
+
+                // Create console textbox
+                debugConsole = new TextBox
+                {
+                    Dock = DockStyle.Fill,
+                    Multiline = true,
+                    ScrollBars = ScrollBars.Both,
+                    BackColor = Color.Black,
+                    ForeColor = Color.Lime,
+                    Font = new Font("Consolas", 9F),
+                    ReadOnly = true,
+                    MaxLength = 0 // No limit
+                };
+
+                // Add toolbar
+                var toolbar = new Panel
+                {
+                    Dock = DockStyle.Top,
+                    Height = 30,
+                    BackColor = Color.FromArgb(40, 40, 40)
+                };
+
+                var btnClear = new Button
+                {
+                    Text = "Clear",
+                    Location = new Point(5, 3),
+                    Size = new Size(60, 24),
+                    BackColor = Color.FromArgb(60, 60, 60),
+                    ForeColor = Color.White,
+                    FlatStyle = FlatStyle.Flat
+                };
+                btnClear.Click += (s, e) => debugConsole.Clear();
+                toolbar.Controls.Add(btnClear);
+
+                var btnSaveLog = new Button
+                {
+                    Text = "Save Log",
+                    Location = new Point(70, 3),
+                    Size = new Size(80, 24),
+                    BackColor = Color.FromArgb(60, 60, 60),
+                    ForeColor = Color.White,
+                    FlatStyle = FlatStyle.Flat
+                };
+                btnSaveLog.Click += SaveDebugLog;
+                toolbar.Controls.Add(btnSaveLog);
+
+                var chkAutoScroll = new CheckBox
+                {
+                    Text = "Auto-scroll",
+                    Location = new Point(160, 6),
+                    Size = new Size(100, 20),
+                    ForeColor = Color.White,
+                    Checked = true,
+                    Name = "chkAutoScroll"
+                };
+                toolbar.Controls.Add(chkAutoScroll);
+
+                debugForm.Controls.Add(debugConsole);
+                debugForm.Controls.Add(toolbar);
+
+                // Handle form closing
+                debugForm.FormClosed += (s, e) => {
+                    lock (debugLock)
+                    {
+                        debugForm = null;
+                        debugConsole = null;
+                    }
+                };
+
+                // Add initial message
+                AppendDebugMessage("🐛 Debug Console Started", Color.Yellow);
+                AppendDebugMessage($"Time: {DateTime.Now:yyyy-MM-dd HH:mm:ss}", Color.Gray);
+                AppendDebugMessage("Monitoring debug messages from all components...\n", Color.Gray);
+
+                debugForm.Show();
+
+                // Keep it on top but not modal
+                debugForm.TopMost = true;
+            }
+        }
+        private void SaveDebugLog(object? sender, EventArgs e)
+        {
+            if (debugConsole == null || string.IsNullOrEmpty(debugConsole.Text)) return;
+
+            try
             {
-                Dock = DockStyle.Fill,
-                Multiline = true,
-                ScrollBars = ScrollBars.Vertical,
-                BackColor = Color.Black,
-                ForeColor = Color.Lime,
-                Font = new Font("Consolas", 9F),
-                ReadOnly = true
-            };
+                var saveDialog = new SaveFileDialog
+                {
+                    Filter = "Text files (*.txt)|*.txt|All files (*.*)|*.*",
+                    FileName = $"TelegramEA_Debug_{DateTime.Now:yyyyMMdd_HHmmss}.txt"
+                };
 
-            debugForm.Controls.Add(debugConsole);
-            debugForm.Show();
-
-            // Keep it on top but not modal
-            debugForm.TopMost = true;
+                if (saveDialog.ShowDialog() == DialogResult.OK)
+                {
+                    File.WriteAllText(saveDialog.FileName, debugConsole.Text);
+                    MessageBox.Show("Debug log saved successfully!", "Save Complete", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Failed to save debug log: {ex.Message}", "Save Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
         }
 
+        private void AppendDebugMessage(string message, Color? color = null)
+        {
+            if (debugConsole == null || debugConsole.IsDisposed) return;
+
+            if (debugConsole.InvokeRequired)
+            {
+                debugConsole.BeginInvoke(new Action(() => AppendDebugMessage(message, color)));
+                return;
+            }
+
+            try
+            {
+                // Limit console size to prevent memory issues
+                if (debugConsole.Text.Length > 100000)
+                {
+                    debugConsole.Text = debugConsole.Text.Substring(50000);
+                }
+
+                var timestamp = DateTime.Now.ToString("HH:mm:ss.fff");
+                var formattedMessage = $"[{timestamp}] {message}{Environment.NewLine}";
+
+                debugConsole.AppendText(formattedMessage);
+
+                // Auto-scroll if enabled
+                var chkAutoScroll = debugForm?.Controls.Find("chkAutoScroll", true).FirstOrDefault() as CheckBox;
+                if (chkAutoScroll?.Checked == true)
+                {
+                    debugConsole.SelectionStart = debugConsole.Text.Length;
+                    debugConsole.ScrollToCaret();
+                }
+            }
+            catch (Exception ex)
+            {
+                // Prevent debug console errors from crashing the app
+                Console.WriteLine($"Debug console error: {ex.Message}");
+            }
+        }
 
         private void InitializeServices()
         {
@@ -113,27 +248,8 @@ namespace TelegramEAManager
 
         private void TelegramService_DebugMessage(object? sender, string message)
         {
-            if (debugConsole != null && !debugConsole.IsDisposed)
-            {
-                if (debugConsole.InvokeRequired)
-                {
-                    debugConsole.Invoke(new Action(() => {
-                        debugConsole.AppendText(message + Environment.NewLine);
-                        // Auto-scroll to bottom
-                        debugConsole.SelectionStart = debugConsole.Text.Length;
-                        debugConsole.ScrollToCaret();
-                    }));
-                }
-                else
-                {
-                    debugConsole.AppendText(message + Environment.NewLine);
-                    debugConsole.SelectionStart = debugConsole.Text.Length;
-                    debugConsole.ScrollToCaret();
-                }
-            }
-
-            // Also log to console
-            Console.WriteLine(message);
+            AppendDebugMessage($"[TELEGRAM] {message}", Color.Cyan);
+            Console.WriteLine($"[TELEGRAM] {message}");
         }
         private void AddDebugButton(Panel parent)
         {
@@ -274,17 +390,13 @@ namespace TelegramEAManager
                 // Update UI on main thread
                 if (this.InvokeRequired)
                 {
-                    this.Invoke(new Action(() => {
-                        AddToLiveSignals(processedSignal);
-                        allSignals.Add(processedSignal);
-                        LogMessage($"📨 New message from {e.channelName}: {processedSignal.Status}");
+                    this.BeginInvoke(new Action(() => {
+                        UpdateAfterNewSignal(processedSignal, e.channelId);
                     }));
                 }
                 else
                 {
-                    AddToLiveSignals(processedSignal);
-                    allSignals.Add(processedSignal);
-                    LogMessage($"📨 New message from {e.channelName}: {processedSignal.Status}");
+                    UpdateAfterNewSignal(processedSignal, e.channelId);
                 }
             }
             catch (Exception ex)
@@ -292,6 +404,78 @@ namespace TelegramEAManager
                 LogMessage($"❌ Error processing message: {ex.Message}");
             }
         }
+        private void UpdateAfterNewSignal(ProcessedSignal processedSignal, long channelId)
+        {
+            // Add to live signals display
+            AddToLiveSignals(processedSignal);
+
+            // Add to signals history
+            allSignals.Add(processedSignal);
+
+            // Update the selected channels table
+            UpdateSelectedChannelSignalCount(channelId);
+
+            // Update statistics
+            UpdateSignalsCount();
+
+            // Log the message
+            LogMessage($"📨 New signal from {processedSignal.ChannelName}: {processedSignal.Status}");
+
+            // Show notification for processed signals
+            if (processedSignal.Status.Contains("Processed"))
+            {
+                ShowNotification($"📊 New Signal: {processedSignal.ParsedData?.Symbol} {processedSignal.ParsedData?.Direction}");
+            }
+        }
+        private void UpdateSelectedChannelSignalCount(long channelId)
+        {
+            var lvSelected = this.Controls.Find("lvSelected", true).FirstOrDefault() as ListView;
+            if (lvSelected == null) return;
+
+            // Update UI thread-safe
+            if (lvSelected.InvokeRequired)
+            {
+                lvSelected.Invoke(new Action(() => UpdateChannelCountInternal(lvSelected, channelId)));
+            }
+            else
+            {
+                UpdateChannelCountInternal(lvSelected, channelId);
+            }
+        }
+        private void UpdateChannelCountInternal(ListView lvSelected, long channelId)
+        {
+            foreach (ListViewItem item in lvSelected.Items)
+            {
+                var channel = item.Tag as ChannelInfo;
+                if (channel != null && channel.Id == channelId)
+                {
+                    // Count signals from this channel
+                    var signalsFromChannel = allSignals.Count(s => s.ChannelId == channelId);
+
+                    // Update the Signals column (index 2)
+                    if (item.SubItems.Count > 2)
+                    {
+                        item.SubItems[2].Text = signalsFromChannel.ToString();
+                    }
+
+                    // Update visual feedback
+                    item.BackColor = Color.FromArgb(200, 255, 200); // Light green flash
+
+                    // Reset color after a moment
+                    var timer = new System.Windows.Forms.Timer { Interval = 1000 };
+                    timer.Tick += (s, e) => {
+                        item.BackColor = Color.FromArgb(220, 255, 220);
+                        timer.Stop();
+                        timer.Dispose();
+                    };
+                    timer.Start();
+
+                    break;
+                }
+            }
+        }
+
+
 
         private void TelegramService_ErrorOccurred(object? sender, string e)
         {
@@ -323,16 +507,9 @@ namespace TelegramEAManager
 
         private void SignalProcessor_ErrorOccurred(object? sender, string e)
         {
-            if (this.InvokeRequired)
-            {
-                this.Invoke(new Action(() => LogMessage($"🔴 Signal Processing Error: {e}")));
-            }
-            else
-            {
-                LogMessage($"🔴 Signal Processing Error: {e}");
-            }
+            AppendDebugMessage($"[ERROR] {e}", Color.Red);
+            LogMessage($"🔴 Signal Processing Error: {e}");
         }
-
 
         private void SetupTimers()
         {
@@ -1330,6 +1507,9 @@ namespace TelegramEAManager
 
             try
             {
+                // Initialize selected channels display
+                InitializeSelectedChannelsDisplay();
+
                 // Clean up old signals first
                 signalProcessor.CleanupProcessedSignals();
 
@@ -1338,6 +1518,9 @@ namespace TelegramEAManager
                 currentSettings.MT4FilesPath = mt4Path;
                 currentSettings.SignalFilePath = "telegram_signals.txt";
                 signalProcessor.UpdateEASettings(currentSettings);
+
+                // Subscribe to debug messages
+                signalProcessor.DebugMessage += SignalProcessor_DebugMessage;
 
                 // Start auto-cleanup
                 StartAutoCleanup();
@@ -1373,6 +1556,33 @@ namespace TelegramEAManager
                 ShowMessage($"❌ Failed to start monitoring:\n\n{ex.Message}", "Monitoring Error", MessageBoxIcon.Error);
             }
         }
+
+        private void InitializeSelectedChannelsDisplay()
+        {
+            var lvSelected = this.Controls.Find("lvSelected", true).FirstOrDefault() as ListView;
+            if (lvSelected == null) return;
+
+            foreach (ListViewItem item in lvSelected.Items)
+            {
+                var channel = item.Tag as ChannelInfo;
+                if (channel != null)
+                {
+                    // Initialize signal count
+                    var signalsFromChannel = allSignals.Count(s => s.ChannelId == channel.Id);
+                    if (item.SubItems.Count > 2)
+                    {
+                        item.SubItems[2].Text = signalsFromChannel.ToString();
+                    }
+                }
+            }
+        }
+
+        private void SignalProcessor_DebugMessage(object? sender, string message)
+        {
+            AppendDebugMessage($"[PROCESSOR] {message}", Color.Yellow);
+            Console.WriteLine($"[PROCESSOR] {message}");
+        }
+
         private void BtnStopMonitoring_Click(object? sender, EventArgs e)
         {
             try
@@ -2049,13 +2259,31 @@ TP 149.50"
 
         private void AddToLiveSignals(ProcessedSignal signal)
         {
-            var lvLiveSignals = this.Controls.Find("lvLiveSignals", true)[0] as ListView;
+            var controls = this.Controls.Find("lvLiveSignals", true);
+            if (controls.Length == 0)
+            {
+                LogMessage("❌ Cannot find lvLiveSignals control!");
+                return;
+            }
+
+            var lvLiveSignals = controls[0] as ListView;
             if (lvLiveSignals == null) return;
 
-            // Convert UTC to local time for display
+            if (lvLiveSignals.InvokeRequired)
+            {
+                lvLiveSignals.Invoke(new Action(() => AddSignalToListView(lvLiveSignals, signal)));
+            }
+            else
+            {
+                AddSignalToListView(lvLiveSignals, signal);
+            }
+        }
+        private void AddSignalToListView(ListView lv, ProcessedSignal signal)
+        {
+            // Use local time for display
             var localTime = signal.DateTime.ToLocalTime();
 
-            var item = new ListViewItem(localTime.ToString("HH:mm:ss")); // Show local time in UI
+            var item = new ListViewItem(localTime.ToString("HH:mm:ss"));
             item.SubItems.Add(signal.ChannelName);
             item.SubItems.Add(signal.ParsedData?.Symbol ?? "N/A");
             item.SubItems.Add(signal.ParsedData?.Direction ?? "N/A");
@@ -2068,19 +2296,26 @@ TP 149.50"
                 item.BackColor = Color.FromArgb(220, 255, 220); // Light green
             else if (signal.Status.Contains("Error") || signal.Status.Contains("Invalid"))
                 item.BackColor = Color.FromArgb(255, 220, 220); // Light red
-            else if (signal.Status.Contains("Ignored"))
-                item.BackColor = Color.FromArgb(255, 255, 220); // Light yellow
-            else if (signal.Status.Contains("Test"))
-                item.BackColor = Color.FromArgb(220, 220, 255); // Light blue
+            else if (signal.Status.Contains("Duplicate"))
+                item.BackColor = Color.FromArgb(255, 255, 200); // Light yellow
+            else if (signal.Status.Contains("No trading signal"))
+                item.BackColor = Color.FromArgb(240, 240, 240); // Light gray
 
-            lvLiveSignals.Items.Insert(0, item);
+            lv.Items.Insert(0, item);
 
-            // Keep only last 50 signals
-            while (lvLiveSignals.Items.Count > 50)
+            // Ensure the new item is visible
+            item.EnsureVisible();
+
+            // Keep only last 100 signals
+            while (lv.Items.Count > 100)
             {
-                lvLiveSignals.Items.RemoveAt(lvLiveSignals.Items.Count - 1);
+                lv.Items.RemoveAt(lv.Items.Count - 1);
             }
+
+            // Force refresh
+            lv.Refresh();
         }
+
 
         private void UpdateSelectedChannelsStatus(string status)
         {
@@ -2297,7 +2532,7 @@ System: Windows Forms .NET 9.0 with WTelegramClient
 
         private void LogMessage(string message)
         {
-            // Add logging functionality if needed
+            AppendDebugMessage($"[LOG] {message}", Color.White);
             Console.WriteLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {message}");
         }
 
@@ -2325,6 +2560,41 @@ System: Windows Forms .NET 9.0 with WTelegramClient
             }
         }
 
+        protected override void OnLoad(EventArgs e)
+        {
+            base.OnLoad(e);
+
+            // Ensure all controls are properly initialized
+            EnsureControlsInitialized();
+
+            // Subscribe to events
+            if (signalProcessor != null)
+            {
+                signalProcessor.DebugMessage += SignalProcessor_DebugMessage;
+            }
+
+            if (telegramService != null)
+            {
+                telegramService.DebugMessage += TelegramService_DebugMessage;
+            }
+        }
+
+
+        private void EnsureControlsInitialized()
+        {
+            // Find and verify critical controls exist
+            var controlsToCheck = new[] { "lvLiveSignals", "lvSelected", "lvChannels" };
+
+            foreach (var controlName in controlsToCheck)
+            {
+                var controls = this.Controls.Find(controlName, true);
+                if (controls.Length == 0)
+                {
+                    MessageBox.Show($"Critical control '{controlName}' not found! UI may not function properly.",
+                                   "Initialization Warning", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
+            }
+        }
         private void SaveMT4Path(string path)
         {
             try
