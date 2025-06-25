@@ -41,7 +41,7 @@ namespace TelegramEAManager
             var signal = new ProcessedSignal
             {
                 Id = Guid.NewGuid().ToString(),
-                DateTime = DateTime.UtcNow, // Always use UTC
+                DateTime = DateTime.UtcNow,
                 ChannelId = channelId,
                 ChannelName = channelName,
                 OriginalText = messageText,
@@ -59,26 +59,12 @@ namespace TelegramEAManager
                     // Apply symbol mapping
                     ApplySymbolMapping(signal.ParsedData);
 
-                    // Create signal key for duplicate detection
-                    var signalKey = $"{channelId}|{parsedData.FinalSymbol}|{parsedData.Direction}";
-
-                    // Check for recent duplicate
-                    if (IsRecentDuplicate(signalKey))
-                    {
-                        signal.Status = "Duplicate - Recently processed";
-                        OnDebugMessage($"⏭️ Duplicate signal ignored: {parsedData.Symbol} {parsedData.Direction}");
-                        return signal;
-                    }
-
                     // Validate signal
                     if (ValidateSignal(signal.ParsedData))
                     {
-                        // Write to EA file with proper duplicate prevention
+                        // Write to EA file (duplicate check happens inside this method)
                         WriteSignalToEAFile(signal);
                         signal.Status = "Processed - Sent to EA";
-
-                        // Add to recent signals tracker
-                        recentSignals[signalKey] = DateTime.UtcNow;
 
                         // Add to history
                         processedSignals.Add(signal);
@@ -98,7 +84,6 @@ namespace TelegramEAManager
             }
             catch (Exception ex)
             {
-                signal.Status = $"Error - {ex.Message}";
                 signal.Status = $"Error - {ex.Message}";
                 signal.ErrorMessage = ex.ToString();
                 OnErrorOccurred($"Error processing signal: {ex.Message}");
@@ -388,7 +373,8 @@ namespace TelegramEAManager
             }
 
             var signalText = FormatSignalForEA(signal);
-            var signalId = signalText.Split('|')[1]; // Extract the signal ID
+            var signalParts = signalText.Split('|');
+            var signalId = signalParts[1]; // Extract the unique signal ID
             var maxRetries = 3;
             var retryCount = 0;
 
@@ -401,7 +387,7 @@ namespace TelegramEAManager
                         // Read existing content
                         var existingLines = File.Exists(filePath) ? File.ReadAllLines(filePath).ToList() : new List<string>();
 
-                        // Check if signal ID already exists
+                        // First check: exact signal ID (this should rarely match due to unique generation)
                         bool signalIdExists = existingLines.Any(line =>
                         {
                             if (string.IsNullOrWhiteSpace(line) || line.StartsWith("#"))
@@ -413,17 +399,22 @@ namespace TelegramEAManager
 
                         if (signalIdExists)
                         {
-                            OnDebugMessage($"⏭️ Signal with ID {signalId} already exists, skipping");
+                            OnDebugMessage($"⏭️ Signal with ID {signalId} already exists (this should be rare!)");
                             return;
                         }
 
-                        // Also check for recent similar signals (same channel, symbol, direction)
+                        // Second check: look for identical signals in the last 30 seconds (not 5 minutes!)
                         var channelId = signal.ChannelId.ToString();
                         var symbol = signal.ParsedData?.FinalSymbol ?? "";
                         var direction = signal.ParsedData?.Direction ?? "";
-                        var cutoffTime = DateTime.UtcNow.AddMinutes(-5); // 5-minute window
+                        var entry = signal.ParsedData?.EntryPrice ?? 0;
+                        var sl = signal.ParsedData?.StopLoss ?? 0;
+                        var tp1 = signal.ParsedData?.TakeProfit1 ?? 0;
 
-                        bool recentSimilarExists = false;
+                        // Much shorter time window - 30 seconds instead of 5 minutes
+                        var cutoffTime = DateTime.UtcNow.AddSeconds(-30);
+
+                        bool identicalSignalExists = false;
 
                         foreach (var line in existingLines)
                         {
@@ -433,15 +424,21 @@ namespace TelegramEAManager
                             var parts = line.Split('|');
                             if (parts.Length >= 12)
                             {
-                                // Check if it's the same signal type
-                                if (parts[2] == channelId && parts[5] == symbol && parts[4] == direction)
+                                // Check if it's the exact same signal (channel, symbol, direction, and prices)
+                                if (parts[2] == channelId &&
+                                    parts[5] == symbol &&
+                                    parts[4] == direction &&
+                                    parts[6] == entry.ToString("F5") &&
+                                    parts[7] == sl.ToString("F5") &&
+                                    parts[8] == tp1.ToString("F5"))
                                 {
                                     if (DateTime.TryParse(parts[0], out DateTime existingTime))
                                     {
+                                        // Only consider it duplicate if it's within 30 seconds
                                         if (existingTime > cutoffTime)
                                         {
-                                            recentSimilarExists = true;
-                                            OnDebugMessage($"⚠️ Recent similar signal exists from {existingTime:HH:mm:ss}");
+                                            identicalSignalExists = true;
+                                            OnDebugMessage($"⚠️ Identical signal already exists from {(DateTime.UtcNow - existingTime).TotalSeconds:F1} seconds ago");
                                             break;
                                         }
                                     }
@@ -449,7 +446,7 @@ namespace TelegramEAManager
                             }
                         }
 
-                        if (!recentSimilarExists)
+                        if (!identicalSignalExists)
                         {
                             // Clean up old signals if file is getting large
                             if (existingLines.Count > 100)
@@ -486,7 +483,7 @@ namespace TelegramEAManager
                         }
                         else
                         {
-                            OnDebugMessage($"⏭️ Skipped duplicate signal: {symbol} {direction}");
+                            OnDebugMessage($"⏭️ Skipped identical signal within 30 seconds: {symbol} {direction}");
                         }
                     }
 
@@ -624,13 +621,12 @@ namespace TelegramEAManager
         // ... rest of the existing methods remain the same ...
         private string GenerateSignalHash(ProcessedSignal signal)
         {
-            // Create a unique hash based on channel, symbol, direction, and time window
-            var timeWindow = DateTime.Now.ToString("yyyyMMddHHmm"); // 1-minute window
-            var signalKey = $"{signal.ChannelId}_{signal.ParsedData?.FinalSymbol}_{signal.ParsedData?.Direction}_{timeWindow}";
+            // Create a truly unique hash using multiple factors including milliseconds
+            var uniqueKey = $"{signal.ChannelId}_{signal.ParsedData?.FinalSymbol}_{signal.ParsedData?.Direction}_{DateTime.UtcNow.Ticks}_{Guid.NewGuid().ToString().Substring(0, 8)}";
 
             // Simple hash function
             int hash = 0;
-            foreach (char c in signalKey)
+            foreach (char c in uniqueKey)
             {
                 hash = ((hash << 5) - hash) + c;
                 hash = hash & hash; // Convert to 32bit integer
@@ -638,7 +634,6 @@ namespace TelegramEAManager
 
             return Math.Abs(hash).ToString("X8"); // Return as hex string
         }
-
 
         public void LoadSymbolMapping()
         {
