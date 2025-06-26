@@ -25,6 +25,7 @@ namespace TelegramEAManager
         private System.Windows.Forms.Timer? cleanupTimer;
 
         private Form? debugForm = null;
+        private bool isDebugFormOpen = false;
         private TextBox? debugConsole = null;
         private readonly object debugLock = new object();
 
@@ -69,28 +70,62 @@ namespace TelegramEAManager
         }
         private void CreateDebugConsole()
         {
-            lock (debugLock)
+            try
             {
-                // Check if debug console already exists
+                // Close existing debug form if open
                 if (debugForm != null && !debugForm.IsDisposed)
                 {
-                    debugForm.Focus();
-                    debugForm.WindowState = FormWindowState.Normal;
-                    return;
+                    debugForm.Close();
+                    debugForm.Dispose();
+                    debugForm = null;
                 }
 
-                // Create new debug window
+                // Create a new debug window
                 debugForm = new Form
                 {
-                    Text = "🐛 Debug Console - Telegram EA Manager",
-                    Size = new Size(800, 400),
+                    Text = "🐛 Debug Console - Telegram EA Manager - islamahmed9717",
+                    Size = new Size(1000, 600),
                     StartPosition = FormStartPosition.Manual,
-                    Location = new Point(this.Right + 10, this.Top),
+                    FormBorderStyle = FormBorderStyle.Sizable,
+                    MinimizeBox = true,
+                    MaximizeBox = true,
+                    ShowInTaskbar = true,
                     BackColor = Color.Black,
-                    Icon = this.Icon
+                    Icon = this.Icon // Use main form's icon if available
                 };
 
-                // Create console textbox
+                // Position next to main form
+                debugForm.Location = new Point(this.Location.X + this.Width + 10, this.Location.Y);
+
+                // Create main panel
+                var mainPanel = new Panel
+                {
+                    Dock = DockStyle.Fill,
+                    Padding = new Padding(5)
+                };
+                debugForm.Controls.Add(mainPanel);
+
+                // Create header panel
+                var headerPanel = new Panel
+                {
+                    Dock = DockStyle.Top,
+                    Height = 40,
+                    BackColor = Color.FromArgb(37, 99, 235)
+                };
+                mainPanel.Controls.Add(headerPanel);
+
+                var lblHeader = new Label
+                {
+                    Text = $"🐛 REAL-TIME DEBUG CONSOLE | Started: {DateTime.Now:HH:mm:ss} | User: islamahmed9717",
+                    Dock = DockStyle.Fill,
+                    ForeColor = Color.White,
+                    Font = new Font("Segoe UI", 10F, FontStyle.Bold),
+                    TextAlign = ContentAlignment.MiddleLeft,
+                    Padding = new Padding(10, 0, 0, 0)
+                };
+                headerPanel.Controls.Add(lblHeader);
+
+                // Create debug text area
                 debugConsole = new TextBox
                 {
                     Dock = DockStyle.Fill,
@@ -100,75 +135,213 @@ namespace TelegramEAManager
                     ForeColor = Color.Lime,
                     Font = new Font("Consolas", 9F),
                     ReadOnly = true,
-                    MaxLength = 0 // No limit
+                    WordWrap = false,
+                    Margin = new Padding(5)
                 };
+                mainPanel.Controls.Add(debugConsole);
 
-                // Add toolbar
-                var toolbar = new Panel
+                // Create button panel
+                var buttonPanel = new Panel
                 {
-                    Dock = DockStyle.Top,
-                    Height = 30,
-                    BackColor = Color.FromArgb(40, 40, 40)
+                    Dock = DockStyle.Bottom,
+                    Height = 50,
+                    BackColor = Color.FromArgb(30, 30, 30)
                 };
+                mainPanel.Controls.Add(buttonPanel);
 
+                // Clear button
                 var btnClear = new Button
                 {
-                    Text = "Clear",
-                    Location = new Point(5, 3),
-                    Size = new Size(60, 24),
-                    BackColor = Color.FromArgb(60, 60, 60),
+                    Text = "🗑️ Clear",
+                    Location = new Point(10, 10),
+                    Size = new Size(80, 30),
+                    BackColor = Color.FromArgb(220, 38, 38),
                     ForeColor = Color.White,
-                    FlatStyle = FlatStyle.Flat
+                    FlatStyle = FlatStyle.Flat,
+                    Font = new Font("Segoe UI", 9F)
                 };
-                btnClear.Click += (s, e) => debugConsole.Clear();
-                toolbar.Controls.Add(btnClear);
+                btnClear.Click += (s, e) => {
+                    if (debugConsole != null && !debugConsole.IsDisposed)
+                    {
+                        debugConsole.Clear();
+                        LogDebugMessage("🗑️ Debug console cleared");
+                    }
+                };
+                buttonPanel.Controls.Add(btnClear);
 
-                var btnSaveLog = new Button
+                // Save log button
+                var btnSave = new Button
                 {
-                    Text = "Save Log",
-                    Location = new Point(70, 3),
-                    Size = new Size(80, 24),
-                    BackColor = Color.FromArgb(60, 60, 60),
+                    Text = "💾 Save Log",
+                    Location = new Point(100, 10),
+                    Size = new Size(90, 30),
+                    BackColor = Color.FromArgb(34, 197, 94),
                     ForeColor = Color.White,
-                    FlatStyle = FlatStyle.Flat
+                    FlatStyle = FlatStyle.Flat,
+                    Font = new Font("Segoe UI", 9F)
                 };
-                btnSaveLog.Click += SaveDebugLog;
-                toolbar.Controls.Add(btnSaveLog);
+                btnSave.Click += (s, e) => SaveDebugLog();
+                buttonPanel.Controls.Add(btnSave);
 
+                // Auto-scroll checkbox
                 var chkAutoScroll = new CheckBox
                 {
                     Text = "Auto-scroll",
-                    Location = new Point(160, 6),
+                    Location = new Point(200, 15),
                     Size = new Size(100, 20),
                     ForeColor = Color.White,
-                    Checked = true,
-                    Name = "chkAutoScroll"
+                    Font = new Font("Segoe UI", 9F),
+                    Checked = true
                 };
-                toolbar.Controls.Add(chkAutoScroll);
+                buttonPanel.Controls.Add(chkAutoScroll);
 
-                debugForm.Controls.Add(debugConsole);
-                debugForm.Controls.Add(toolbar);
+                // Status label
+                var lblStatus = new Label
+                {
+                    Text = "Debug console ready...",
+                    Location = new Point(320, 15),
+                    Size = new Size(400, 20),
+                    ForeColor = Color.Gray,
+                    Font = new Font("Segoe UI", 8F)
+                };
+                buttonPanel.Controls.Add(lblStatus);
 
                 // Handle form closing
-                debugForm.FormClosed += (s, e) => {
-                    lock (debugLock)
-                    {
-                        debugForm = null;
-                        debugConsole = null;
-                    }
+                debugForm.FormClosing += (s, e) => {
+                    isDebugFormOpen = false;
+                    debugConsole = null;
+                    debugForm = null;
                 };
 
-                // Add initial message
-                AppendDebugMessage("🐛 Debug Console Started", Color.Yellow);
-                AppendDebugMessage($"Time: {DateTime.Now:yyyy-MM-dd HH:mm:ss}", Color.Gray);
-                AppendDebugMessage("Monitoring debug messages from all components...\n", Color.Gray);
-
+                // Show the form
                 debugForm.Show();
+                isDebugFormOpen = true;
 
-                // Keep it on top but not modal
-                debugForm.TopMost = true;
+                // Initial message
+                LogDebugMessage("🚀 DEBUG CONSOLE STARTED");
+                LogDebugMessage($"📅 Time: {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+                LogDebugMessage($"👤 User: islamahmed9717");
+                LogDebugMessage($"🔗 Connected to Telegram: {(telegramService?.IsUserAuthorized() ?? false)}");
+                LogDebugMessage($"📊 Monitoring: {(isMonitoring ? "ACTIVE" : "STOPPED")}");
+                LogDebugMessage("═══════════════════════════════════════");
+
+                LogMessage("✅ Debug console opened successfully");
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"❌ Failed to open debug console:\n\n{ex.Message}",
+                               "Debug Console Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
+        // Enhanced debug message logging with better error handling
+        private void LogDebugMessage(string message)
+        {
+            try
+            {
+                // Always log to console as backup
+                Console.WriteLine($"[DEBUG] {message}");
+
+                if (debugConsole != null && !debugConsole.IsDisposed && isDebugFormOpen)
+                {
+                    var timestamp = DateTime.Now.ToString("HH:mm:ss.fff");
+                    var formattedMessage = $"[{timestamp}] {message}";
+
+                    if (debugConsole.InvokeRequired)
+                    {
+                        try
+                        {
+                            debugConsole.Invoke(new Action(() => {
+                                AppendToDebugConsole(formattedMessage);
+                            }));
+                        }
+                        catch (InvalidOperationException)
+                        {
+                            // Control is being disposed, ignore
+                        }
+                    }
+                    else
+                    {
+                        AppendToDebugConsole(formattedMessage);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                // Fail silently but log to console
+                Console.WriteLine($"Debug console error: {ex.Message}");
+            }
+        }
+        private void AppendToDebugConsole(string message)
+        {
+            try
+            {
+                if (debugConsole == null || debugConsole.IsDisposed) return;
+
+                debugConsole.AppendText(message + Environment.NewLine);
+
+                // Auto-scroll to bottom
+                debugConsole.SelectionStart = debugConsole.Text.Length;
+                debugConsole.ScrollToCaret();
+
+                // Limit text length to prevent memory issues
+                if (debugConsole.Text.Length > 100000)
+                {
+                    var lines = debugConsole.Lines;
+                    if (lines.Length > 1000)
+                    {
+                        var keepLines = lines.Skip(lines.Length - 800).ToArray();
+                        debugConsole.Text = string.Join(Environment.NewLine, keepLines);
+                        debugConsole.AppendText(Environment.NewLine + "... (older messages truncated) ..." + Environment.NewLine);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Append error: {ex.Message}");
+            }
+        }
+
+        private void SaveDebugLog()
+        {
+            try
+            {
+                if (debugConsole == null || debugConsole.IsDisposed || string.IsNullOrEmpty(debugConsole.Text))
+                {
+                    MessageBox.Show("❌ No debug data to save!", "Save Error", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+
+                var saveDialog = new SaveFileDialog
+                {
+                    Filter = "Text files (*.txt)|*.txt|Log files (*.log)|*.log|All files (*.*)|*.*",
+                    FileName = $"TelegramEA_Debug_islamahmed9717_{DateTime.Now:yyyyMMdd_HHmmss}.txt",
+                    Title = "Save Debug Log"
+                };
+
+                if (saveDialog.ShowDialog() == DialogResult.OK)
+                {
+                    var logContent = $"# Telegram EA Manager Debug Log\r\n" +
+                                   $"# Generated: {DateTime.Now:yyyy-MM-dd HH:mm:ss}\r\n" +
+                                   $"# User: islamahmed9717\r\n" +
+                                   $"# System: {Environment.OSVersion}\r\n" +
+                                   $"# .NET Version: {Environment.Version}\r\n" +
+                                   $"#" + new string('=', 50) + "\r\n\r\n" +
+                                   debugConsole.Text;
+
+                    File.WriteAllText(saveDialog.FileName, logContent);
+
+                    MessageBox.Show($"✅ Debug log saved successfully!\n\n📁 File: {saveDialog.FileName}\n📊 Size: {new FileInfo(saveDialog.FileName).Length} bytes",
+                                   "Log Saved", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"❌ Failed to save debug log:\n\n{ex.Message}",
+                               "Save Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+
         private void SaveDebugLog(object? sender, EventArgs e)
         {
             if (debugConsole == null || string.IsNullOrEmpty(debugConsole.Text)) return;
@@ -248,7 +421,9 @@ namespace TelegramEAManager
 
         private void TelegramService_DebugMessage(object? sender, string message)
         {
-            AppendDebugMessage($"[TELEGRAM] {message}", Color.Cyan);
+            LogDebugMessage($"📡 TELEGRAM: {message}");
+
+            // Also log to console for backup
             Console.WriteLine($"[TELEGRAM] {message}");
         }
         private void AddDebugButton(Panel parent)
@@ -256,19 +431,32 @@ namespace TelegramEAManager
             var btnDebug = new Button
             {
                 Name = "btnDebug",
-                Text = "🐛 DEBUG",
+                Text = isDebugFormOpen ? "🐛 HIDE DEBUG" : "🐛 SHOW DEBUG",
                 Location = new Point(440, 295),
-                Size = new Size(80, 35),
-                BackColor = Color.FromArgb(239, 68, 68),
+                Size = new Size(120, 35),
+                BackColor = isDebugFormOpen ? Color.FromArgb(220, 38, 38) : Color.FromArgb(239, 68, 68),
                 ForeColor = Color.White,
                 FlatStyle = FlatStyle.Flat,
                 Font = new Font("Segoe UI", 9F, FontStyle.Bold)
             };
-            btnDebug.Click += (s, e) => CreateDebugConsole();
+
+            btnDebug.Click += (s, e) => {
+                if (isDebugFormOpen && debugForm != null && !debugForm.IsDisposed)
+                {
+                    debugForm.Close();
+                    btnDebug.Text = "🐛 SHOW DEBUG";
+                    btnDebug.BackColor = Color.FromArgb(239, 68, 68);
+                }
+                else
+                {
+                    CreateDebugConsole();
+                    btnDebug.Text = "🐛 HIDE DEBUG";
+                    btnDebug.BackColor = Color.FromArgb(220, 38, 38);
+                }
+            };
+
             parent.Controls.Add(btnDebug);
         }
-
-
         private void StartSignalFileMonitoring(string mt4Path)
         {
             try
@@ -384,26 +572,39 @@ namespace TelegramEAManager
         {
             try
             {
+                LogDebugMessage($"📨 NEW MESSAGE from {e.channelName} (ID: {e.channelId})");
+                LogDebugMessage($"📝 Content preview: {e.message.Substring(0, Math.Min(100, e.message.Length))}...");
+
                 // Process the message in the signal processor
                 var processedSignal = signalProcessor.ProcessTelegramMessage(e.message, e.channelId, e.channelName);
+
+                LogDebugMessage($"⚙️ Signal processed with status: {processedSignal.Status}");
 
                 // Update UI on main thread
                 if (this.InvokeRequired)
                 {
-                    this.BeginInvoke(new Action(() => {
-                        UpdateAfterNewSignal(processedSignal, e.channelId);
+                    this.Invoke(new Action(() => {
+                        AddToLiveSignals(processedSignal);
+                        allSignals.Add(processedSignal);
+                        LogMessage($"📨 New message from {e.channelName}: {processedSignal.Status}");
                     }));
                 }
                 else
                 {
-                    UpdateAfterNewSignal(processedSignal, e.channelId);
+                    AddToLiveSignals(processedSignal);
+                    allSignals.Add(processedSignal);
+                    LogMessage($"📨 New message from {e.channelName}: {processedSignal.Status}");
                 }
+
+                LogDebugMessage($"✅ Message processing completed");
             }
             catch (Exception ex)
             {
+                LogDebugMessage($"❌ ERROR processing message: {ex.Message}");
                 LogMessage($"❌ Error processing message: {ex.Message}");
             }
         }
+
         private void UpdateAfterNewSignal(ProcessedSignal processedSignal, long channelId)
         {
             // Add to live signals display
@@ -912,7 +1113,7 @@ namespace TelegramEAManager
                 ForeColor = Color.White,
                 FlatStyle = FlatStyle.Flat,
                 Font = new Font("Segoe UI", 12F, FontStyle.Bold),
-                Enabled = true, // ALWAYS VISIBLE
+                Enabled = true,
                 UseVisualStyleBackColor = false
             };
             btnStartMonitoring.FlatAppearance.BorderSize = 0;
@@ -969,22 +1170,6 @@ namespace TelegramEAManager
             btnTestSignal.Click += BtnTestSignal_Click;
             parent.Controls.Add(btnTestSignal);
 
-            var btnTestID = new Button
-            {
-                Name = "btnTestID",
-                Text = "🔑 TEST ID",
-                Location = new Point(520, 295),  // Adjust position as needed
-                Size = new Size(80, 35),
-                BackColor = Color.FromArgb(139, 92, 246),  // Purple color
-                ForeColor = Color.White,
-                FlatStyle = FlatStyle.Flat,
-                Font = new Font("Segoe UI", 9F, FontStyle.Bold),
-                UseVisualStyleBackColor = false
-            };
-            btnTestID.FlatAppearance.BorderSize = 0;
-            btnTestID.Click += (s, e) => TestSignalIDMatching();
-            parent.Controls.Add(btnTestID);
-
             var btnGenerateEAConfig = new Button
             {
                 Name = "btnGenerateEAConfig",
@@ -1001,7 +1186,6 @@ namespace TelegramEAManager
             btnGenerateEAConfig.Click += BtnGenerateEAConfig_Click;
             parent.Controls.Add(btnGenerateEAConfig);
 
-            // ADD THE NEW BUTTONS HERE - SAME ROW
             var btnClearOldSignals = new Button
             {
                 Name = "btnClearOldSignals",
@@ -1039,20 +1223,48 @@ namespace TelegramEAManager
             btnCheckFile.Click += (s, e) => CheckSignalFile();
             parent.Controls.Add(btnCheckFile);
 
+            // FIXED: Properly create the debug button using the corrected method
             var btnDebug = new Button
             {
                 Name = "btnDebug",
-                Text = "🐛 DEBUG",
+                Text = isDebugFormOpen ? "🐛 HIDE DEBUG" : "🐛 SHOW DEBUG",
                 Location = new Point(440, 295),
-                Size = new Size(80, 35),
-                BackColor = Color.FromArgb(239, 68, 68),
+                Size = new Size(110, 35),
+                BackColor = isDebugFormOpen ? Color.FromArgb(220, 38, 38) : Color.FromArgb(239, 68, 68),
                 ForeColor = Color.White,
                 FlatStyle = FlatStyle.Flat,
-                Font = new Font("Segoe UI", 9F, FontStyle.Bold)
+                Font = new Font("Segoe UI", 9F, FontStyle.Bold),
+                UseVisualStyleBackColor = false
             };
-            btnDebug.Click += (s, e) => CreateDebugConsole();
-            parent.Controls.Add(btnDebug);
+            btnDebug.FlatAppearance.BorderSize = 0;
 
+            // FIXED: Proper debug button click handler
+            btnDebug.Click += (s, e) => {
+                try
+                {
+                    if (isDebugFormOpen && debugForm != null && !debugForm.IsDisposed)
+                    {
+                        debugForm.Close();
+                        btnDebug.Text = "🐛 SHOW DEBUG";
+                        btnDebug.BackColor = Color.FromArgb(239, 68, 68);
+                        LogMessage("Debug console closed");
+                    }
+                    else
+                    {
+                        CreateDebugConsole();
+                        btnDebug.Text = "🐛 HIDE DEBUG";
+                        btnDebug.BackColor = Color.FromArgb(220, 38, 38);
+                        LogMessage("Debug console opened");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    LogMessage($"❌ Debug button error: {ex.Message}");
+                    MessageBox.Show($"❌ Debug console error:\n\n{ex.Message}",
+                                   "Debug Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
+            };
+            parent.Controls.Add(btnDebug);
 
             // LIVE SIGNALS SECTION
             var lblLiveSignals = new Label
@@ -1088,7 +1300,6 @@ namespace TelegramEAManager
 
             parent.Controls.Add(lvLiveSignals);
         }
-
         private void CreateBottomPanel()
         {
             var bottomPanel = new Panel

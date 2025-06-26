@@ -17,10 +17,6 @@ namespace TelegramEAManager
         private readonly string signalsHistoryFile = "signals_history.json";
         private readonly object fileLock = new object();
 
-        // Track recent signals to prevent duplicates
-        private readonly Dictionary<string, DateTime> recentSignals = new Dictionary<string, DateTime>();
-        private readonly TimeSpan signalCooldown = TimeSpan.FromMinutes(5); // Prevent same signal within 5 minutes
-
         // Events
         public event EventHandler<ProcessedSignal>? SignalProcessed;
         public event EventHandler<string>? ErrorOccurred;
@@ -41,8 +37,8 @@ namespace TelegramEAManager
         {
             var signal = new ProcessedSignal
             {
-                // Remove the GUID generation
-                DateTime = DateTime.UtcNow,
+                Id = Guid.NewGuid().ToString(),
+                DateTime = DateTime.UtcNow, // Always use UTC
                 ChannelId = channelId,
                 ChannelName = channelName,
                 OriginalText = messageText,
@@ -51,29 +47,30 @@ namespace TelegramEAManager
 
             try
             {
+                Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] 🔄 Processing message from {channelName}");
+                Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] 📝 Message: {messageText.Substring(0, Math.Min(200, messageText.Length))}...");
+
                 // Parse the message for trading signals
                 var parsedData = ParseTradingSignal(messageText);
                 if (parsedData != null)
                 {
+                    Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] ✅ Signal parsed: {parsedData.Symbol} {parsedData.Direction}");
+
                     signal.ParsedData = parsedData;
 
                     // Apply symbol mapping
                     ApplySymbolMapping(signal.ParsedData);
-
-                    // Generate consistent hash ID AFTER parsing
-                    signal.Id = GenerateSignalHash(
-                        channelId.ToString(),
-                        signal.ParsedData.FinalSymbol ?? signal.ParsedData.Symbol ?? "",
-                        signal.ParsedData.Direction ?? "",
-                        signal.DateTime
-                    );
+                    Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] 🗺️ Symbol mapping applied: {parsedData.OriginalSymbol} → {parsedData.FinalSymbol}");
 
                     // Validate signal
                     if (ValidateSignal(signal.ParsedData))
                     {
+                        Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] ✅ Signal validation passed");
+
                         // Write to EA file with proper file sharing
                         WriteSignalToEAFile(signal);
                         signal.Status = "Processed - Sent to EA";
+                        Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] 📁 Signal written to EA file");
 
                         // Add to history
                         processedSignals.Add(signal);
@@ -84,47 +81,24 @@ namespace TelegramEAManager
                     else
                     {
                         signal.Status = "Invalid - Missing required data";
+                        Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] ❌ Signal validation failed");
                     }
                 }
                 else
                 {
                     signal.Status = "No trading signal detected";
+                    Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] ⚠️ No trading signal detected in message");
                 }
             }
             catch (Exception ex)
             {
                 signal.Status = $"Error - {ex.Message}";
                 signal.ErrorMessage = ex.ToString();
+                Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] ❌ Error processing signal: {ex.Message}");
                 OnErrorOccurred($"Error processing signal: {ex.Message}");
             }
 
             return signal;
-        }
-
-
-        private bool IsRecentDuplicate(string signalKey)
-        {
-            if (recentSignals.ContainsKey(signalKey))
-            {
-                var lastSignalTime = recentSignals[signalKey];
-                if (DateTime.UtcNow - lastSignalTime < signalCooldown)
-                {
-                    return true;
-                }
-            }
-
-            // Clean up old entries
-            var keysToRemove = recentSignals
-                .Where(kvp => DateTime.UtcNow - kvp.Value > signalCooldown)
-                .Select(kvp => kvp.Key)
-                .ToList();
-
-            foreach (var key in keysToRemove)
-            {
-                recentSignals.Remove(key);
-            }
-
-            return false;
         }
 
         /// <summary>
@@ -368,6 +342,7 @@ namespace TelegramEAManager
         /// Write signal to EA file with proper file sharing and locking
         /// </summary>
         // Update WriteSignalToEAFile header comment
+        // Also update the WriteSignalToEAFile method to ensure proper file handling:
         private void WriteSignalToEAFile(ProcessedSignal signal)
         {
             if (string.IsNullOrEmpty(eaSettings.MT4FilesPath))
@@ -376,14 +351,18 @@ namespace TelegramEAManager
             }
 
             var filePath = Path.Combine(eaSettings.MT4FilesPath, "telegram_signals.txt");
-            var directory = Path.GetDirectoryName(filePath);
 
+            // Ensure directory exists
+            var directory = Path.GetDirectoryName(filePath);
             if (!string.IsNullOrEmpty(directory))
             {
                 Directory.CreateDirectory(directory);
             }
 
             var signalText = FormatSignalForEA(signal);
+            Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] About to write signal: {signalText}");
+
+            // Write with retry mechanism
             var maxRetries = 3;
             var retryCount = 0;
 
@@ -393,30 +372,40 @@ namespace TelegramEAManager
                 {
                     lock (fileLock)
                     {
-                        // Check if file exists and create with header if not
-                        if (!File.Exists(filePath))
+                        // Read existing content to check for duplicates
+                        var existingLines = File.Exists(filePath) ? File.ReadAllLines(filePath).ToList() : new List<string>();
+
+                        // Check if this exact signal already exists (check by channel + symbol + direction + time)
+                        var signalKey = $"|{signal.ChannelId}|{signal.ChannelName}|{signal.ParsedData?.Direction}|{signal.ParsedData?.Symbol}|";
+                        bool isDuplicate = existingLines.Any(line =>
+                            line.Contains(signalKey) &&
+                            line.EndsWith("|NEW") &&
+                            !line.StartsWith("#"));
+
+                        if (!isDuplicate)
                         {
-                            using (var fs = new FileStream(filePath, FileMode.Create, FileAccess.Write, FileShare.Read))
-                            using (var writer = new StreamWriter(fs, System.Text.Encoding.UTF8))
+                            using (var fs = new FileStream(
+                                filePath,
+                                FileMode.Append,
+                                FileAccess.Write,
+                                FileShare.Read,
+                                4096,
+                                FileOptions.WriteThrough))
+                            using (var writer = new StreamWriter(fs, System.Text.Encoding.UTF8) { AutoFlush = true })
                             {
-                                writer.WriteLine("# Telegram EA MT5 Signal File");
-                                writer.WriteLine("# Format: ID|TIMESTAMP|CHANNEL_ID|CHANNEL_NAME|DIRECTION|SYMBOL|ENTRY|SL|TP1|TP2|TP3|STATUS");
-                                writer.WriteLine("# Status: NEW = ready to process, PROCESSED = already handled");
-                                writer.WriteLine($"# Generated: {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss} UTC");
-                                writer.WriteLine("");
+                                writer.WriteLine(signalText);
                             }
-                        }
 
-                        // Append the signal
-                        using (var fs = new FileStream(filePath, FileMode.Append, FileAccess.Write, FileShare.Read, 4096, FileOptions.WriteThrough))
-                        using (var writer = new StreamWriter(fs, System.Text.Encoding.UTF8) { AutoFlush = true })
+                            Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Signal written successfully to: {filePath}");
+                        }
+                        else
                         {
-                            writer.WriteLine(signalText);
+                            Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Signal already exists in file, skipping duplicate");
                         }
-
-                        Console.WriteLine($"✅ Signal written to file with ID: {signal.Id}");
-                        break; // Success
                     }
+
+                    // Success - break the retry loop
+                    break;
                 }
                 catch (IOException ex) when (retryCount < maxRetries - 1)
                 {
@@ -430,36 +419,6 @@ namespace TelegramEAManager
                 }
             }
         }
-        private void CleanupOldSignalsFromFile(string filePath, List<string> existingLines)
-        {
-            var newLines = new List<string>();
-            var cutoffTime = DateTime.UtcNow.AddMinutes(-30); // Keep only last 30 minutes
-
-            foreach (var line in existingLines)
-            {
-                if (line.StartsWith("#") || string.IsNullOrWhiteSpace(line))
-                {
-                    newLines.Add(line);
-                    continue;
-                }
-
-                var parts = line.Split('|');
-                if (parts.Length >= 11)
-                {
-                    if (DateTime.TryParse(parts[0], out DateTime signalTime))
-                    {
-                        if (signalTime > cutoffTime || parts[10] == "NEW")
-                        {
-                            newLines.Add(line);
-                        }
-                    }
-                }
-            }
-
-            File.WriteAllLines(filePath, newLines);
-            OnDebugMessage($"🧹 Cleaned up old signals, kept {newLines.Count} recent entries");
-        }
-
         public void CleanupProcessedSignals()
         {
             try
@@ -521,23 +480,24 @@ namespace TelegramEAManager
         /// </summary>
         private string FormatSignalForEA(ProcessedSignal signal)
         {
-            var utcTime = DateTime.UtcNow;
+            var utcTime = DateTime.Now;
 
-            // Format with ID as first field: ID|TIMESTAMP|CHANNEL_ID|CHANNEL_NAME|DIRECTION|SYMBOL|ENTRY|SL|TP1|TP2|TP3|STATUS
-            var formatted = $"{signal.Id}|" +
-                           $"{utcTime:yyyy.MM.dd HH:mm:ss}|" +
-                           $"{signal.ChannelId}|" +
-                           $"{signal.ChannelName}|" +
-                           $"{signal.ParsedData?.Direction ?? "BUY"}|" +
-                           $"{signal.ParsedData?.FinalSymbol ?? signal.ParsedData?.Symbol ?? "EURUSD"}|" +
-                           $"{(signal.ParsedData?.EntryPrice ?? 0):F5}|" +
-                           $"{(signal.ParsedData?.StopLoss ?? 0):F5}|" +
-                           $"{(signal.ParsedData?.TakeProfit1 ?? 0):F5}|" +
-                           $"{(signal.ParsedData?.TakeProfit2 ?? 0):F5}|" +
-                           $"{(signal.ParsedData?.TakeProfit3 ?? 0):F5}|" +
-                           $"NEW";
+            // FIXED FORMAT: TIMESTAMP|CHANNEL_ID|CHANNEL_NAME|DIRECTION|SYMBOL|ENTRY|SL|TP1|TP2|TP3|STATUS
+            var formatted = $"{utcTime:yyyy.MM.dd HH:mm:ss}|" +
+                            $"{signal.ChannelId}|" +
+                            $"{signal.ChannelName}|" +
+                            $"{signal.ParsedData?.Direction ?? "BUY"}|" +
+                            $"{signal.ParsedData?.FinalSymbol ?? signal.ParsedData?.Symbol ?? "EURUSD"}|" +
+                            $"{(signal.ParsedData?.EntryPrice ?? 0):F5}|" +
+                            $"{(signal.ParsedData?.StopLoss ?? 0):F5}|" +
+                            $"{(signal.ParsedData?.TakeProfit1 ?? 0):F5}|" +
+                            $"{(signal.ParsedData?.TakeProfit2 ?? 0):F5}|" +
+                            $"{(signal.ParsedData?.TakeProfit3 ?? 0):F5}|" +
+                            $"NEW";
 
-            Console.WriteLine($"[{utcTime:HH:mm:ss} UTC] Writing signal with ID: {signal.Id}");
+            // Debug log with UTC time
+            Console.WriteLine($"[{utcTime:HH:mm:ss} UTC] Writing signal: {signal.ParsedData?.Symbol} {signal.ParsedData?.Direction}");
+            Console.WriteLine($"[{utcTime:HH:mm:ss} UTC] Formatted line: {formatted}");
 
             return formatted;
         }

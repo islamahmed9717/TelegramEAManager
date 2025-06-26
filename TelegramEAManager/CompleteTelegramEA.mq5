@@ -74,7 +74,7 @@ input int BreakevenPlusPips = 2; // Breakeven + X pips
 input group "==== NOTIFICATIONS ===="
 input bool SendMT5Alerts = true; // Send MT5 alerts
 input bool SendPushNotifications = true; // Send push notifications
-input bool PrintToExpertLog = true; // Print detailed logs
+input bool PrintToExpertLog = false; // Print detailed logs
 input string CommentPrefix = "TelegramEA"; // Trade comment prefix
 
 input group "==== TIME FILTER ===="
@@ -94,6 +94,12 @@ CTrade trade;
 CSymbolInfo symbolInfo;
 CPositionInfo positionInfo;
 COrderInfo orderInfo;
+
+
+static long g_lastFileSize = 0;
+static datetime g_lastFileCheck = 0;
+static string g_lastProcessedLine = "";  // Track last processed line
+static int g_totalLinesProcessed = 0;    // Track total lines processed
 
 //--- Global Variables
 string processedSignalIds[]; // Array to store processed signal IDs
@@ -160,17 +166,17 @@ struct TelegramSignal
 //+------------------------------------------------------------------+
 int OnInit()
 {
-   Print("=================================================================");
-   Print("🚀 TELEGRAM EA MANAGER - COMPLETE MT5 VERSION");
-   Print("=================================================================");
-   Print("👤 Developer: islamahmed9717");
-   Print("📅 Version: 2.17 MT5 (2025-06-20 23:03:50 UTC)");
-   Print("🔗 GitHub: https://github.com/islamahmed9717");
-   Print("⏰ Signal Expiry: ", MaxSignalAgeMinutes, " minutes");
-   Print("🎯 Platform: MetaTrader 5");
-   Print("📱 Works with: Telegram EA Manager Windows Application");
-   Print("=================================================================");
-   
+    Print("=================================================================");
+    Print("🚀 TELEGRAM EA MANAGER - FIXED VERSION");
+    Print("=================================================================");
+    Print("👤 Developer: islamahmed9717");
+    Print("📅 Version: 2.17 MT5 FIXED - No More Loops!");
+    Print("🔗 GitHub: https://github.com/islamahmed9717");
+    Print("⏰ Signal Expiry: ", MaxSignalAgeMinutes, " minutes");
+    Print("🎯 Platform: MetaTrader 5");
+    Print("📱 Fixed: Processed signals loop issue");
+    Print("=================================================================");
+    
    // Validate critical parameters FIRST
    if(SignalCheckInterval < 1 || SignalCheckInterval > 60)
    {
@@ -313,6 +319,9 @@ int OnInit()
       Print("💡 Use the Windows application to get Channel IDs");
    }
    
+     Print("🚀 EA initialized successfully - monitoring for NEW signals only!");
+    Print("📝 Processed signals will be ignored automatically");
+   
    return(INIT_SUCCEEDED);
 }
 
@@ -386,7 +395,36 @@ void OnTick()
 //+------------------------------------------------------------------+
 void OnTimer()
 {
-   CheckForNewSignals();
+    static int timerCalls = 0;
+    timerCalls++;
+    
+    // FIXED: Only check for signals every 3rd timer call (15 seconds with 5-second timer)
+    if(timerCalls % 3 == 0)
+    {
+        CheckForNewSignals();
+    }
+    
+    // Update trailing stops and breakeven
+    if(UseTrailingStop && openTradesCount > 0)
+        ProcessTrailingStops();
+    
+    if(MoveSLToBreakeven && openTradesCount > 0)
+        ProcessBreakeven();
+    
+    // Clean up closed positions
+    if(openTradesCount > 0)
+        CleanupClosedPositions();
+    
+    // FIXED: Update comment less frequently
+    if(timerCalls % 6 == 0) // Every 30 seconds
+    {
+        UpdateComment();
+        CleanupOldProcessedSignals();
+    }
+    
+    // FIXED: Reset counter to prevent overflow
+    if(timerCalls >= 1000)
+        timerCalls = 0;
 }
 
 //+------------------------------------------------------------------+
@@ -586,33 +624,25 @@ void CheckForNewSignals()
     if(!IsTimeToTrade())
         return;
     
-    static datetime lastCheckTime = 0;
+    // FIXED: Don't check too frequently
     datetime currentTime = TimeCurrent();
+    if(currentTime - g_lastFileCheck < 3) // Minimum 3 seconds between checks
+        return;
+    g_lastFileCheck = currentTime;
     
-    if(PrintToExpertLog && currentTime - lastCheckTime >= 60) // Log every minute
-    {
-        Print("🔍 === SIGNAL CHECK === Time: ", TimeToString(currentTime, TIME_DATE|TIME_SECONDS), " UTC");
-        lastCheckTime = currentTime;
-    }
+    string filename = "telegram_signals.txt";
     
-    int fileHandle = FileOpen("telegram_signals.txt",
-                             FILE_READ | 
-                             FILE_SHARE_READ | 
-                             FILE_SHARE_WRITE | 
-                             FILE_TXT | 
-                             FILE_ANSI);
-    
+    int fileHandle = FileOpen(filename, FILE_READ|FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_TXT|FILE_ANSI);
     if(fileHandle == INVALID_HANDLE)
     {
         if(PrintToExpertLog && totalSignalsProcessed == 0)
-        {
-            Print("📁 Signal file not found: telegram_signals.txt");
-        }
+            Print("📁 Signal file not found: ", filename);
         return;
     }
     
-    int lineCount = 0;
-    int newSignals = 0;
+    // FIXED: Read all lines and track progress
+    string allLines[];
+    int totalLines = 0;
     
     while(!FileIsEnding(fileHandle))
     {
@@ -620,86 +650,101 @@ void CheckForNewSignals()
         if(FileIsEnding(fileHandle) && StringLen(line) == 0)
             break;
             
-        lineCount++;
+        ArrayResize(allLines, totalLines + 1);
+        allLines[totalLines] = line;
+        totalLines++;
+    }
+    FileClose(fileHandle);
+    
+    // FIXED: Only process lines we haven't seen before
+    int newSignalsCount = 0;
+    int processedSignalsCount = 0;
+    int newSignalsFound = 0;
+    
+    for(int i = 0; i < totalLines; i++)
+    {
+        string line = allLines[i];
         StringTrimLeft(line);
         StringTrimRight(line);
         
         // Skip empty lines and comments
         if(StringLen(line) == 0 || StringFind(line, "#") == 0)
             continue;
-        
-        // Check if it's a signal line (has at least 12 pipe-separated fields)
-        string parts[];
-        int partCount = StringSplit(line, '|', parts);
-        
-        if(partCount >= 12)
+            
+        // FIXED: Count signals by status
+        if(StringFind(line, "|NEW") > 0)
         {
-            if(ProcessFormattedSignalLine(line))
+            newSignalsCount++;
+            
+            // FIXED: Process only if we haven't processed this exact line before
+            if(line != g_lastProcessedLine)
             {
-                newSignals++;
+                if(ProcessFormattedSignalLineFixed(line))
+                {
+                    newSignalsFound++;
+                    g_lastProcessedLine = line; // Remember this line
+                }
             }
+        }
+        else if(StringFind(line, "|PROCESSED") > 0)
+        {
+            processedSignalsCount++;
         }
     }
     
-    FileClose(fileHandle);
-    
-    if(PrintToExpertLog && newSignals > 0)
+    // FIXED: Better logging
+    if(PrintToExpertLog)
     {
-        Print("✅ Processed ", newSignals, " new signals from ", lineCount, " lines");
+        if(newSignalsFound > 0)
+        {
+            Print("✅ Found and processed ", newSignalsFound, " NEW signals");
+            Print("📊 File status: ", newSignalsCount, " NEW, ", processedSignalsCount, " PROCESSED");
+        }
+        else if(newSignalsCount == 0 && processedSignalsCount > 0)
+        {
+            // FIXED: Only print this occasionally to avoid spam
+            static datetime lastNoNewSignalsLog = 0;
+            if(currentTime - lastNoNewSignalsLog > 60) // Log once per minute
+            {
+                Print("📂 File check: No NEW signals found (", processedSignalsCount, " already processed)");
+                lastNoNewSignalsLog = currentTime;
+            }
+        }
     }
 }
 
-//+------------------------------------------------------------------+
-//| Process formatted signal line (TIMESTAMP|CHANNEL|SYMBOL|...)    |
-//+------------------------------------------------------------------+
-// Update ProcessFormattedSignalLine to handle new format with ID
-bool ProcessFormattedSignalLine(string line)
+bool ProcessFormattedSignalLineFixed(string line)
 {
     string parts[];
     int partCount = StringSplit(line, '|', parts);
     
-    // New format: ID|TIMESTAMP|CHANNEL_ID|CHANNEL_NAME|DIRECTION|SYMBOL|ENTRY|SL|TP1|TP2|TP3|STATUS
-    if(partCount < 12) // Changed from 11 to 12
+    if(partCount < 11)
     {
         if(PrintToExpertLog)
-            Print("❌ Invalid signal format. Expected 12 fields, got ", partCount);
+            Print("❌ Invalid signal format. Expected 11 parts, got: ", partCount);
         return false;
     }
     
-    // Extract the signal ID from the file (first field)
-    string signalId = parts[0];
-    StringTrimLeft(signalId);
-    StringTrimRight(signalId);
-    
-    if(PrintToExpertLog)
-        Print("📝 Processing signal with ID: ", signalId);
-    
-    // Check if already processed using the file ID
-    if(IsSignalAlreadyProcessed(signalId))
-    {
-        if(PrintToExpertLog)
-            Print("⏭️ Signal already processed: ", signalId);
-        return true;
-    }
-    
-    // Check signal status (last field)
-    string signalStatus = parts[11];
+    // FIXED: Check signal status first
+    string signalStatus = parts[10];
     StringTrimLeft(signalStatus);
     StringTrimRight(signalStatus);
     
+    // FIXED: Only process NEW signals, skip everything else
     if(signalStatus != "NEW")
     {
-        if(PrintToExpertLog)
-            Print("⏭️ Skipping signal with status: ", signalStatus);
-        return true;
+        return false; // Don't log, just skip
     }
     
+    if(PrintToExpertLog)
+        Print("🆕 Found NEW signal, processing...");
+    
     TelegramSignal signal;
-    signal.signalId = signalId; // Use the ID from file
+    signal.signalId = GenerateSignalId(line);
     signal.receivedTime = TimeCurrent();
     
-    // Parse remaining fields (indices shifted by 1 due to ID field)
-    string timestampStr = parts[1];
+    // Parse timestamp
+    string timestampStr = parts[0];
     StringTrimLeft(timestampStr);
     StringTrimRight(timestampStr);
     signal.signalTime = ParseTimestamp(timestampStr);
@@ -707,28 +752,232 @@ bool ProcessFormattedSignalLine(string line)
     if(signal.signalTime == 0)
         signal.signalTime = TimeCurrent();
     
-    // Check signal age
+    // FIXED: Check signal age
     long signalAgeMinutes = (TimeCurrent() - signal.signalTime) / 60;
+    
+    if(PrintToExpertLog)
+        Print("⏰ Signal age: ", (int)signalAgeMinutes, " minutes (Max: ", MaxSignalAgeMinutes, ")");
     
     if(signalAgeMinutes > MaxSignalAgeMinutes)
     {
         if(PrintToExpertLog)
-            Print("⏰ Signal expired (", IntegerToString((int)signalAgeMinutes), " minutes old): ", signalId);
+            Print("⏰ Signal expired: ", (int)signalAgeMinutes, " minutes old");
+        
         totalExpiredSignals++;
-        AddToProcessedSignals(signalId); // Don't retry expired signals
+        MarkSignalAsProcessedInFileFixed(line);
+        return true;
+    }
+    
+    // FIXED: Check if already processed using better method
+    if(IsSignalAlreadyProcessedFixed(signal.signalId))
+    {
+        if(PrintToExpertLog)
+            Print("⏭️ Signal already processed in memory: ", signal.signalId);
         return true;
     }
     
     // Parse signal data
-    signal.channelId = parts[2];
-    signal.channelName = parts[3];
-    signal.direction = parts[4];
-    signal.originalSymbol = parts[5];
-    signal.entryPrice = StringToDouble(parts[6]);
-    signal.stopLoss = StringToDouble(parts[7]);
-    signal.takeProfit1 = StringToDouble(parts[8]);
-    signal.takeProfit2 = StringToDouble(parts[9]);
-    signal.takeProfit3 = StringToDouble(parts[10]);
+    signal.channelId = StringToInteger(parts[1]);
+    signal.channelName = parts[2];
+    signal.direction = parts[3];
+    signal.originalSymbol = parts[4];
+    signal.entryPrice = StringToDouble(parts[5]);
+    signal.stopLoss = StringToDouble(parts[6]);
+    signal.takeProfit1 = StringToDouble(parts[7]);
+    signal.takeProfit2 = StringToDouble(parts[8]);
+    signal.takeProfit3 = StringToDouble(parts[9]);
+    signal.originalText = line;
+    signal.finalSymbol = ProcessSymbolTransformation(signal.originalSymbol);
+    signal.isExpired = false;
+    signal.isProcessed = false;
+    
+    if(PrintToExpertLog)
+    {
+        Print("📊 Processing signal:");
+        Print("   Symbol: ", signal.originalSymbol, " → ", signal.finalSymbol);
+        Print("   Direction: ", signal.direction);
+        Print("   Entry: ", signal.entryPrice > 0 ? DoubleToString(signal.entryPrice, 5) : "Market");
+        Print("   SL: ", signal.stopLoss > 0 ? DoubleToString(signal.stopLoss, 5) : "None");
+        Print("   TP1: ", signal.takeProfit1 > 0 ? DoubleToString(signal.takeProfit1, 5) : "None");
+    }
+    
+    // Validate and process
+    if(ValidateSignal(signal))
+    {
+        if(PrintToExpertLog)
+            Print("✅ Signal validation passed, executing...");
+            
+        ProcessValidatedSignal(signal);
+        AddToProcessedSignals(signal.signalId);
+        MarkSignalAsProcessedInFileFixed(line);
+        
+        return true;
+    }
+    else
+    {
+        if(PrintToExpertLog)
+            Print("❌ Signal validation failed");
+        AddToProcessedSignals(signal.signalId);
+        MarkSignalAsProcessedInFileFixed(line);
+        return false;
+    }
+}
+bool IsSignalAlreadyProcessedFixed(string signalId)
+{
+    // FIXED: Use a more efficient method
+    for(int i = MathMax(0, processedSignalCount - 50); i < processedSignalCount; i++)
+    {
+        if(processedSignalIds[i] == signalId)
+            return true;
+    }
+    return false;
+}
+void MarkSignalAsProcessedInFileFixed(string originalLine)
+{
+    // FIXED: Simple replacement without reading entire file
+    if(StringLen(SignalFilePath) == 0)
+        return;
+    
+    // FIXED: Do this in background to avoid blocking
+    static bool isUpdating = false;
+    if(isUpdating)
+        return;
+        
+    isUpdating = true;
+    
+    string filename = "telegram_signals.txt";
+    
+    // Read file
+    int fileHandle = FileOpen(filename, FILE_READ|FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_TXT|FILE_ANSI);
+    if(fileHandle == INVALID_HANDLE)
+    {
+        isUpdating = false;
+        return;
+    }
+    
+    string fileContent = "";
+    while(!FileIsEnding(fileHandle))
+    {
+        string line = FileReadString(fileHandle);
+        if(!FileIsEnding(fileHandle) || StringLen(line) > 0)
+        {
+            // FIXED: Replace only the matching line
+            if(StringFind(line, originalLine) >= 0 && StringFind(line, "|NEW") > 0)
+            {
+                StringReplace(line, "|NEW", "|PROCESSED");
+                if(PrintToExpertLog)
+                    Print("📝 Marked signal as PROCESSED in file");
+            }
+            fileContent += line + "\n";
+        }
+    }
+    FileClose(fileHandle);
+    
+    // Write back
+    fileHandle = FileOpen(filename, FILE_WRITE|FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_TXT|FILE_ANSI);
+    if(fileHandle != INVALID_HANDLE)
+    {
+        FileWriteString(fileHandle, fileContent);
+        FileClose(fileHandle);
+    }
+    
+    isUpdating = false;
+}
+
+
+//+------------------------------------------------------------------+
+//| Process formatted signal line (TIMESTAMP|CHANNEL|SYMBOL|...)    |
+//+------------------------------------------------------------------+
+// Update ProcessFormattedSignalLine to handle new format with ID
+// Replace the existing ProcessFormattedSignalLine function with this fixed version:
+bool ProcessFormattedSignalLine(string line)
+{
+    string parts[];
+    int partCount = StringSplit(line, '|', parts);
+    
+    // Expected format: TIMESTAMP|CHANNEL_ID|CHANNEL_NAME|DIRECTION|SYMBOL|ENTRY|SL|TP1|TP2|TP3|STATUS
+    if(partCount < 11)
+    {
+        if(PrintToExpertLog)
+            Print("❌ Invalid signal format. Expected 11 parts, got: ", partCount, " | Line: ", line);
+        return false;
+    }
+    
+    // FIXED: Check signal status - only process NEW signals
+    string signalStatus = parts[10];
+    StringTrimLeft(signalStatus);
+    StringTrimRight(signalStatus);
+    
+    if(PrintToExpertLog)
+        Print("📊 Signal status: ", signalStatus);
+    
+    // Skip if not NEW
+    if(signalStatus != "NEW")
+    {
+        if(PrintToExpertLog)
+            Print("⏭️ Skipping signal with status: ", signalStatus);
+        return true; // Successfully processed (but skipped)
+    }
+    
+    TelegramSignal signal;
+    
+    // FIXED: Generate signal ID from channel + symbol + direction + timestamp (more unique)
+    string uniqueContent = parts[1] + "|" + parts[4] + "|" + parts[3] + "|" + parts[0];
+    signal.signalId = GenerateSignalId(uniqueContent);
+    signal.receivedTime = TimeCurrent();
+    
+    if(PrintToExpertLog)
+        Print("🆔 Generated signal ID: ", signal.signalId);
+    
+    // Parse timestamp
+    string timestampStr = parts[0];
+    StringTrimLeft(timestampStr);
+    StringTrimRight(timestampStr);
+    signal.signalTime = ParseTimestamp(timestampStr);
+    
+    // If timestamp parsing failed, use current time
+    if(signal.signalTime == 0)
+        signal.signalTime = TimeCurrent();
+    
+    // FIXED: Check signal age BEFORE checking if processed
+    long signalAgeMinutes = (TimeCurrent() - signal.signalTime) / 60;
+    
+    if(PrintToExpertLog)
+        Print("⏰ Signal age: ", (int)signalAgeMinutes, " minutes (Max allowed: ", MaxSignalAgeMinutes, ")");
+    
+    if(signalAgeMinutes > MaxSignalAgeMinutes)
+    {
+        if(PrintToExpertLog)
+            Print("⏰ Signal expired: ", (int)signalAgeMinutes, " minutes old (Max: ", MaxSignalAgeMinutes, ")");
+        
+        totalExpiredSignals++;
+        
+        // Mark as processed to avoid checking again
+        MarkSignalAsProcessedInFile(line);
+        return true; // Successfully processed (but expired)
+    }
+    
+    // FIXED: Check if already processed AFTER age check
+    if(IsSignalAlreadyProcessed(signal.signalId))
+    {
+        if(PrintToExpertLog)
+            Print("⏭️ Signal already processed: ", signal.signalId);
+        return true; // Already processed, skip
+    }
+    
+    if(PrintToExpertLog)
+        Print("🆕 Processing NEW signal: ", signal.signalId);
+    
+    // Parse remaining parts
+    signal.channelId = StringToInteger(parts[1]);
+    signal.channelName = parts[2];
+    signal.direction = parts[3];
+    signal.originalSymbol = parts[4];
+    signal.entryPrice = StringToDouble(parts[5]);
+    signal.stopLoss = StringToDouble(parts[6]);
+    signal.takeProfit1 = StringToDouble(parts[7]);
+    signal.takeProfit2 = StringToDouble(parts[8]);
+    signal.takeProfit3 = StringToDouble(parts[9]);
     
     signal.originalText = line;
     signal.finalSymbol = ProcessSymbolTransformation(signal.originalSymbol);
@@ -738,12 +987,13 @@ bool ProcessFormattedSignalLine(string line)
     if(PrintToExpertLog)
     {
         Print("📊 Parsed signal details:");
-        Print("   • ID: ", signal.signalId);
-        Print("   • Symbol: ", signal.originalSymbol, " → ", signal.finalSymbol);
-        Print("   • Direction: ", signal.direction);
-        Print("   • Entry: ", DoubleToString(signal.entryPrice, 5));
-        Print("   • SL: ", DoubleToString(signal.stopLoss, 5));
-        Print("   • TP1: ", DoubleToString(signal.takeProfit1, 5));
+        Print("   Channel: ", signal.channelName, " (", signal.channelId, ")");
+        Print("   Symbol: ", signal.originalSymbol, " → ", signal.finalSymbol);
+        Print("   Direction: ", signal.direction);
+        Print("   Entry: ", signal.entryPrice);
+        Print("   SL: ", signal.stopLoss);
+        Print("   TP1: ", signal.takeProfit1);
+        Print("   Age: ", (int)signalAgeMinutes, " minutes");
     }
     
     // Validate stops before processing
@@ -751,18 +1001,82 @@ bool ProcessFormattedSignalLine(string line)
     {
         Print("❌ Invalid stop levels for ", signal.finalSymbol);
         AddToProcessedSignals(signal.signalId);
+        MarkSignalAsProcessedInFile(line);
         return true;
     }
     
     // Validate and process signal
     if(ValidateSignal(signal))
     {
+        if(PrintToExpertLog)
+            Print("✅ Signal validation passed, executing trades...");
+            
         ProcessValidatedSignal(signal);
         AddToProcessedSignals(signal.signalId);
-        UpdateSignalStatusInFile(line, "PROCESSED");
+        MarkSignalAsProcessedInFile(line);
+        
+        if(PrintToExpertLog)
+            Print("✅ Signal processing completed for: ", signal.signalId);
+    }
+    else
+    {
+        if(PrintToExpertLog)
+            Print("❌ Signal validation failed for: ", signal.finalSymbol);
+        AddToProcessedSignals(signal.signalId);
+        MarkSignalAsProcessedInFile(line);
     }
     
     return true;
+}
+
+
+void MarkSignalAsProcessedInFile(string originalLine)
+{
+    if(StringLen(SignalFilePath) == 0)
+        return;
+        
+    // Read all lines
+    int fileHandle = FileOpen(SignalFilePath, FILE_READ|FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_TXT|FILE_ANSI);
+    if(fileHandle == INVALID_HANDLE)
+        return;
+        
+    string lines[];
+    int lineCount = 0;
+    
+    while(!FileIsEnding(fileHandle))
+    {
+        string line = FileReadString(fileHandle);
+        if(FileIsEnding(fileHandle) && StringLen(line) == 0)
+            break;
+            
+        ArrayResize(lines, lineCount + 1);
+        lines[lineCount] = line;
+        lineCount++;
+    }
+    FileClose(fileHandle);
+    
+    // Find and update the line
+    for(int i = 0; i < lineCount; i++)
+    {
+        if(StringFind(lines[i], originalLine) >= 0 && StringFind(lines[i], "|NEW") >= 0)
+        {
+            StringReplace(lines[i], "|NEW", "|PROCESSED");
+            if(PrintToExpertLog)
+                Print("📝 Marked signal as PROCESSED in file");
+            break;
+        }
+    }
+    
+    // Write back to file
+    fileHandle = FileOpen(SignalFilePath, FILE_WRITE|FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_TXT|FILE_ANSI);
+    if(fileHandle != INVALID_HANDLE)
+    {
+        for(int i = 0; i < lineCount; i++)
+        {
+            FileWriteString(fileHandle, lines[i] + "\n");
+        }
+        FileClose(fileHandle);
+    }
 }
 
 bool ValidateStopLevels(TelegramSignal &signal)
@@ -899,15 +1213,33 @@ void ProcessTextBasedSignal(string signalText)
 //+------------------------------------------------------------------+
 string GenerateSignalId(string content)
 {
-   // Create a simple hash-like ID from the content
-   int hash = 0;
-   for(int i = 0; i < StringLen(content); i++)
-   {
-      hash = ((hash * 31) + StringGetCharacter(content, i)) % 1000000;
-   }
-   
-   // Include timestamp to make it more unique
-   return IntegerToString(hash) + "_" + IntegerToString((int)TimeCurrent());
+    // FIXED: Use parts of the signal for more unique ID
+    string parts[];
+    int partCount = StringSplit(content, '|', parts);
+    
+    if(partCount >= 5)
+    {
+        // Use: timestamp + channel + symbol + direction
+        string baseId = parts[0] + "_" + parts[1] + "_" + parts[4] + "_" + parts[3];
+        
+        // Create simple hash
+        int hash = 0;
+        for(int i = 0; i < StringLen(baseId); i++)
+        {
+            hash = ((hash * 31) + StringGetCharacter(baseId, i)) % 1000000;
+        }
+        
+        return IntegerToString(hash);
+    }
+    
+    // Fallback to original method
+    int hash = 0;
+    for(int i = 0; i < StringLen(content); i++)
+    {
+        hash = ((hash * 31) + StringGetCharacter(content, i)) % 1000000;
+    }
+    
+    return IntegerToString(hash) + "_" + IntegerToString((int)TimeCurrent());
 }
 
 //+------------------------------------------------------------------+
@@ -1048,63 +1380,65 @@ void LoadProcessedSignalIds()
 //+------------------------------------------------------------------+
 bool ValidateSignal(TelegramSignal &signal)
 {
-   // Basic validation
-   if(StringLen(signal.originalSymbol) == 0)
-   {
-      if(PrintToExpertLog)
-         Print("❌ MT5 Invalid signal: Missing symbol");
-      return false;
-   }
-   
-   if(StringLen(signal.direction) == 0)
-   {
-      if(PrintToExpertLog)
-         Print("❌ MT5 Invalid signal: Missing direction");
-      return false;
-   }
-   
-   // Validate direction
-   if(signal.direction != "BUY" && signal.direction != "SELL")
-   {
-      if(PrintToExpertLog)
-         Print("❌ MT5 Invalid signal: Invalid direction: ", signal.direction);
-      return false;
-   }
-   
-   if(StringLen(signal.finalSymbol) == 0)
-   {
-      if(PrintToExpertLog)
-         Print("🚫 MT5 Signal filtered: ", signal.originalSymbol, " (excluded by symbol filters)");
-      totalSymbolsFiltered++;
-      return false;
-   }
-   
-   // Check if channel is monitored (if ChannelIDs parameter is set)
-   if(StringLen(ChannelIDs) > 0 && !IsChannelMonitored(signal.channelId))
-   {
-      if(PrintToExpertLog)
-         Print("⏭️ MT5 Skipping signal from unmonitored channel: ", signal.channelId);
-      return false;
-   }
-   
-   // FIXED: Validate price levels
-   if(signal.stopLoss <= 0 && IgnoreTradesWithoutSL)
-   {
-      if(PrintToExpertLog)
-         Print("⚠️ MT5 Ignoring signal without SL: ", signal.finalSymbol);
-      return false;
-   }
-   
-   if(signal.takeProfit1 <= 0 && IgnoreTradesWithoutTP)
-   {
-      if(PrintToExpertLog)
-         Print("⚠️ MT5 Ignoring signal without TP: ", signal.finalSymbol);
-      return false;
-   }
-   
-   return true;
+    // Basic validation
+    if(StringLen(signal.originalSymbol) == 0)
+    {
+        if(PrintToExpertLog)
+            Print("❌ Invalid signal: Missing symbol");
+        return false;
+    }
+    
+    if(StringLen(signal.direction) == 0)
+    {
+        if(PrintToExpertLog)
+            Print("❌ Invalid signal: Missing direction");
+        return false;
+    }
+    
+    // Validate direction
+    if(signal.direction != "BUY" && signal.direction != "SELL")
+    {
+        if(PrintToExpertLog)
+            Print("❌ Invalid signal: Invalid direction: ", signal.direction);
+        return false;
+    }
+    
+    if(StringLen(signal.finalSymbol) == 0)
+    {
+        if(PrintToExpertLog)
+            Print("🚫 Signal filtered: ", signal.originalSymbol, " (excluded by symbol filters)");
+        totalSymbolsFiltered++;
+        return false;
+    }
+    
+    // Check if channel is monitored (if ChannelIDs parameter is set)
+    if(StringLen(ChannelIDs) > 0 && !IsChannelMonitored(IntegerToString(signal.channelId)))
+    {
+        if(PrintToExpertLog)
+            Print("⏭️ Skipping signal from unmonitored channel: ", signal.channelId);
+        return false;
+    }
+    
+    // Validate price levels
+    if(signal.stopLoss <= 0 && IgnoreTradesWithoutSL)
+    {
+        if(PrintToExpertLog)
+            Print("⚠️ Ignoring signal without SL: ", signal.finalSymbol);
+        return false;
+    }
+    
+    if(signal.takeProfit1 <= 0 && IgnoreTradesWithoutTP)
+    {
+        if(PrintToExpertLog)
+            Print("⚠️ Ignoring signal without TP: ", signal.finalSymbol);
+        return false;
+    }
+    
+    if(PrintToExpertLog)
+        Print("✅ Signal validation successful for: ", signal.finalSymbol);
+    
+    return true;
 }
-
 void LogFileError(string operation, string filename, int errorCode)
 {
    Print("❌ MT5 File operation failed:");
