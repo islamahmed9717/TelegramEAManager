@@ -1505,7 +1505,6 @@ TP2: 1.0950";
 
             if (isAlreadyConnected && !string.IsNullOrEmpty(phoneNumber))
             {
-                // Already connected - just reload channels
                 var result = MessageBox.Show("✅ Already connected to Telegram!\n\n🔄 Do you want to reload channels?\n\n" +
                                            "Click YES to refresh channel list\n" +
                                            "Click NO to reconnect with different account",
@@ -1515,7 +1514,6 @@ TP2: 1.0950";
 
                 if (result == DialogResult.Yes)
                 {
-                    // Just reload channels
                     await ReloadChannels();
                     return;
                 }
@@ -1523,7 +1521,6 @@ TP2: 1.0950";
                 {
                     return;
                 }
-                // If No, continue with reconnection process
             }
 
             if (string.IsNullOrEmpty(phoneNumber))
@@ -1549,7 +1546,6 @@ TP2: 1.0950";
 
             try
             {
-                // Connect to Telegram using the new WTelegramClient
                 bool connected = await telegramService.ConnectAsync(phoneNumber);
 
                 if (connected)
