@@ -572,13 +572,8 @@ namespace TelegramEAManager
         {
             try
             {
-                LogDebugMessage($"📨 NEW MESSAGE from {e.channelName} (ID: {e.channelId})");
-                LogDebugMessage($"📝 Content preview: {e.message.Substring(0, Math.Min(100, e.message.Length))}...");
-
                 // Process the message in the signal processor
                 var processedSignal = signalProcessor.ProcessTelegramMessage(e.message, e.channelId, e.channelName);
-
-                LogDebugMessage($"⚙️ Signal processed with status: {processedSignal.Status}");
 
                 // Update UI on main thread
                 if (this.InvokeRequired)
@@ -587,6 +582,9 @@ namespace TelegramEAManager
                         AddToLiveSignals(processedSignal);
                         allSignals.Add(processedSignal);
                         LogMessage($"📨 New message from {e.channelName}: {processedSignal.Status}");
+
+                        // Update signal counts in selected channels
+                        UpdateSelectedChannelsSignalCounts();
                     }));
                 }
                 else
@@ -594,13 +592,13 @@ namespace TelegramEAManager
                     AddToLiveSignals(processedSignal);
                     allSignals.Add(processedSignal);
                     LogMessage($"📨 New message from {e.channelName}: {processedSignal.Status}");
-                }
 
-                LogDebugMessage($"✅ Message processing completed");
+                    // Update signal counts in selected channels
+                    UpdateSelectedChannelsSignalCounts();
+                }
             }
             catch (Exception ex)
             {
-                LogDebugMessage($"❌ ERROR processing message: {ex.Message}");
                 LogMessage($"❌ Error processing message: {ex.Message}");
             }
         }
@@ -1758,7 +1756,7 @@ TP2: 1.0950";
             var channel = e.Item.Tag as ChannelInfo;
             if (channel == null) return;
 
-            var lvSelected = this.Controls.Find("lvSelected", true)[0] as ListView;
+            var lvSelected = this.Controls.Find("lvSelected", true).FirstOrDefault() as ListView;
             if (lvSelected == null) return;
 
             if (e.Item.Checked)
@@ -1770,10 +1768,10 @@ TP2: 1.0950";
 
                     var item = new ListViewItem(channel.Title);
                     item.SubItems.Add(channel.Id.ToString());
-                    item.SubItems.Add("0");
-                    item.SubItems.Add("✅ Ready");
+                    item.SubItems.Add("0"); // Signals count
+                    item.SubItems.Add("✅ Ready"); // Status
                     item.Tag = channel;
-                    item.BackColor = Color.FromArgb(220, 255, 220);
+                    item.BackColor = Color.FromArgb(255, 255, 220); // Light yellow initially
 
                     lvSelected.Items.Add(item);
                 }
@@ -1795,7 +1793,11 @@ TP2: 1.0950";
             }
 
             UpdateSelectedCount();
+
+            // Force refresh
+            lvSelected.Refresh();
         }
+
 
         private async void BtnStartMonitoring_Click(object? sender, EventArgs e)
         {
@@ -1818,9 +1820,6 @@ TP2: 1.0950";
 
             try
             {
-                // Initialize selected channels display
-                InitializeSelectedChannelsDisplay();
-
                 // Clean up old signals first
                 signalProcessor.CleanupProcessedSignals();
 
@@ -1829,9 +1828,6 @@ TP2: 1.0950";
                 currentSettings.MT4FilesPath = mt4Path;
                 currentSettings.SignalFilePath = "telegram_signals.txt";
                 signalProcessor.UpdateEASettings(currentSettings);
-
-                // Subscribe to debug messages
-                signalProcessor.DebugMessage += SignalProcessor_DebugMessage;
 
                 // Start auto-cleanup
                 StartAutoCleanup();
@@ -1852,7 +1848,10 @@ TP2: 1.0950";
                 if (btnStop != null) btnStop.Enabled = true;
 
                 UpdateStatus(true, true);
+
+                // Update selected channels to show "Live" status
                 UpdateSelectedChannelsStatus("📊 Live");
+                UpdateSelectedChannelsSignalCounts(); // Add this new method
 
                 ShowMessage($"✅ Monitoring started successfully!\n\n" +
                            $"📊 Monitoring {selectedChannels.Count} channels\n" +
@@ -1866,6 +1865,30 @@ TP2: 1.0950";
             {
                 ShowMessage($"❌ Failed to start monitoring:\n\n{ex.Message}", "Monitoring Error", MessageBoxIcon.Error);
             }
+        }
+        private void UpdateSelectedChannelsSignalCounts()
+        {
+            var lvSelected = this.Controls.Find("lvSelected", true).FirstOrDefault() as ListView;
+            if (lvSelected == null) return;
+
+            if (lvSelected.InvokeRequired)
+            {
+                lvSelected.Invoke(new Action(() => UpdateSelectedChannelsSignalCounts()));
+                return;
+            }
+
+            foreach (ListViewItem item in lvSelected.Items)
+            {
+                var channel = item.Tag as ChannelInfo;
+                if (channel != null && item.SubItems.Count > 2)
+                {
+                    // Count signals from this channel
+                    var signalCount = allSignals.Count(s => s.ChannelId == channel.Id);
+                    item.SubItems[2].Text = signalCount.ToString();
+                }
+            }
+
+            lvSelected.Refresh();
         }
 
         private void InitializeSelectedChannelsDisplay()
@@ -1918,6 +1941,8 @@ TP2: 1.0950";
                 if (btnStop != null) btnStop.Enabled = false;
 
                 UpdateStatus(telegramService.IsUserAuthorized(), false);
+
+                // Update selected channels to show "Ready" status
                 UpdateSelectedChannelsStatus("✅ Ready");
 
                 ShowMessage("⏹️ Monitoring stopped successfully!", "Monitoring Stopped", MessageBoxIcon.Information);
@@ -2007,7 +2032,7 @@ TP 149.50"
                 var random = new Random();
                 var testMessage = testScenarios[random.Next(testScenarios.Length)];
 
-                // Process the test message
+                // Process the test message with CURRENT timestamp (as it's a real-time test)
                 var processedSignal = signalProcessor.ProcessTelegramMessage(testMessage, 999999, "TEST_CHANNEL");
 
                 // Add to signals history and UI
@@ -2024,27 +2049,26 @@ TP 149.50"
                 if (fileWritten)
                 {
                     var lines = File.ReadAllLines(signalFilePath);
-                    // Update the ShowMessage method call to match the existing overloads
-                    ShowMessage($"🧪 TEST SIGNAL RESULTS:\n\n" +
-                                $"✅ Signal Type: {processedSignal.ParsedData?.Symbol} {processedSignal.ParsedData?.Direction}\n" +
-                                $"📝 Status: {processedSignal.Status}\n" +
-                                $"📁 File Written: {(fileWritten ? "YES ✅" : "NO ❌")}\n" +
-                                $"📏 File Size: {fileSize} bytes\n" +
-                                $"🕒 Timestamp: {DateTime.UtcNow:yyyy.MM.dd HH:mm:ss} UTC\n\n" +
-                                $"📄 Last Line in File:\n{lastLine}\n\n" +
-                                $"💡 Now check your EA - it should process this signal immediately!",
-                                "Test Signal Complete",
-                                MessageBoxIcon.Information);
                     lastLine = lines.LastOrDefault(l => !string.IsNullOrWhiteSpace(l) && !l.StartsWith("#")) ?? "";
                 }
 
-              
+                ShowMessage($"🧪 TEST SIGNAL RESULTS:\n\n" +
+                            $"✅ Signal Type: {processedSignal.ParsedData?.Symbol} {processedSignal.ParsedData?.Direction}\n" +
+                            $"📝 Status: {processedSignal.Status}\n" +
+                            $"📁 File Written: {(fileWritten ? "YES ✅" : "NO ❌")}\n" +
+                            $"📏 File Size: {fileSize} bytes\n" +
+                            $"🕒 Timestamp: {processedSignal.DateTime:yyyy.MM.dd HH:mm:ss} UTC\n\n" +
+                            $"📄 Last Line in File:\n{lastLine}\n\n" +
+                            $"💡 Now check your EA - it should process this signal immediately!",
+                            "Test Signal Complete",
+                            MessageBoxIcon.Information);
             }
             catch (Exception ex)
             {
                 ShowMessage($"❌ Failed to process test signal:\n\n{ex.Message}", "Test Failed", MessageBoxIcon.Error);
             }
         }
+
 
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
@@ -2312,6 +2336,12 @@ TP 149.50"
 
             // Update signals count
             UpdateSignalsCount();
+
+            // Update selected channels if monitoring
+            if (isMonitoring)
+            {
+                UpdateSelectedChannelsSignalCounts();
+            }
         }
         private void ClearOldSignalsFromFile()
         {
@@ -2330,6 +2360,7 @@ TP 149.50"
                     // Read all lines
                     var lines = File.ReadAllLines(signalFilePath).ToList();
                     var newLines = new List<string>();
+                    var utcNow = DateTime.UtcNow;
 
                     // Keep header lines (those starting with #)
                     foreach (var line in lines)
@@ -2348,10 +2379,14 @@ TP 149.50"
                                 if (DateTime.TryParse(timestampStr, out DateTime signalTime))
                                 {
                                     // Keep only signals from last hour
-                                    var ageMinutes = (DateTime.UtcNow - signalTime).TotalMinutes;
-                                    if (ageMinutes <= 60) // Keep signals less than 60 minutes old
+                                    var ageMinutes = (utcNow - signalTime).TotalMinutes;
+                                    if (ageMinutes <= 10) // Keep signals less than 60 minutes old
                                     {
                                         newLines.Add(line);
+                                    }
+                                    else
+                                    {
+                                        LogMessage($"🧹 Removing old signal: {parts[4]} {parts[3]} - Age: {ageMinutes:F1} minutes");
                                     }
                                 }
                             }
@@ -2361,7 +2396,7 @@ TP 149.50"
                     // Write back cleaned file
                     File.WriteAllLines(signalFilePath, newLines);
 
-                    LogMessage($"🧹 Cleaned signal file - removed old signals");
+                    LogMessage($"🧹 Cleaned signal file - removed old signals, kept {newLines.Count(l => !l.StartsWith("#") && !string.IsNullOrWhiteSpace(l))} recent signals");
                 }
             }
             catch (Exception ex)
@@ -2570,24 +2605,49 @@ TP 149.50"
 
         private void AddToLiveSignals(ProcessedSignal signal)
         {
-            var controls = this.Controls.Find("lvLiveSignals", true);
-            if (controls.Length == 0)
-            {
-                LogMessage("❌ Cannot find lvLiveSignals control!");
-                return;
-            }
-
-            var lvLiveSignals = controls[0] as ListView;
+            var lvLiveSignals = this.Controls.Find("lvLiveSignals", true)[0] as ListView;
             if (lvLiveSignals == null) return;
 
-            if (lvLiveSignals.InvokeRequired)
+            // IMPORTANT: Use the signal's actual timestamp, not current time
+            // The signal.DateTime should already be the correct receive time
+            var signalTime = signal.DateTime;
+
+            // For display, you can choose to show local time or UTC
+            // Here we'll show local time in the UI for user convenience
+            var displayTime = signalTime.ToLocalTime();
+
+            var item = new ListViewItem(displayTime.ToString("HH:mm:ss")); // Display time
+            item.SubItems.Add(signal.ChannelName);
+            item.SubItems.Add(signal.ParsedData?.Symbol ?? "N/A");
+            item.SubItems.Add(signal.ParsedData?.Direction ?? "N/A");
+            item.SubItems.Add(signal.ParsedData?.StopLoss > 0 ? signal.ParsedData.StopLoss.ToString("F5") : "N/A");
+            item.SubItems.Add(signal.ParsedData?.TakeProfit1 > 0 ? signal.ParsedData.TakeProfit1.ToString("F5") : "N/A");
+            item.SubItems.Add(signal.Status);
+
+            // Store the actual UTC timestamp in the Tag for reference
+            item.Tag = new { Signal = signal, UtcTime = signal.DateTime, LocalTime = displayTime };
+
+            // Color coding based on status
+            if (signal.Status.Contains("Processed"))
+                item.BackColor = Color.FromArgb(220, 255, 220); // Light green
+            else if (signal.Status.Contains("Error") || signal.Status.Contains("Invalid"))
+                item.BackColor = Color.FromArgb(255, 220, 220); // Light red
+            else if (signal.Status.Contains("Ignored"))
+                item.BackColor = Color.FromArgb(255, 255, 220); // Light yellow
+            else if (signal.Status.Contains("Test"))
+                item.BackColor = Color.FromArgb(220, 220, 255); // Light blue
+
+            // Insert at top (newest first)
+            lvLiveSignals.Items.Insert(0, item);
+
+            // Keep only last 50 signals
+            while (lvLiveSignals.Items.Count > 50)
             {
-                lvLiveSignals.Invoke(new Action(() => AddSignalToListView(lvLiveSignals, signal)));
+                lvLiveSignals.Items.RemoveAt(lvLiveSignals.Items.Count - 1);
             }
-            else
-            {
-                AddSignalToListView(lvLiveSignals, signal);
-            }
+
+            // Log the actual timestamp being used
+            LogMessage($"📊 Signal added to live feed - UTC: {signal.DateTime:yyyy-MM-dd HH:mm:ss} | Local: {displayTime:HH:mm:ss}");
         }
         private void AddSignalToListView(ListView lv, ProcessedSignal signal)
         {
@@ -2630,17 +2690,44 @@ TP 149.50"
 
         private void UpdateSelectedChannelsStatus(string status)
         {
-            var lvSelected = this.Controls.Find("lvSelected", true)[0] as ListView;
+            var lvSelected = this.Controls.Find("lvSelected", true).FirstOrDefault() as ListView;
             if (lvSelected == null) return;
+
+            // Update the list on the UI thread if necessary
+            if (lvSelected.InvokeRequired)
+            {
+                lvSelected.Invoke(new Action(() => UpdateSelectedChannelsStatus(status)));
+                return;
+            }
 
             foreach (ListViewItem item in lvSelected.Items)
             {
-                item.SubItems[3].Text = status; // Status column (index 3 now since we removed one column)
-                if (status.Contains("Live"))
-                    item.BackColor = Color.FromArgb(200, 255, 200);
+                // Update the status column (index 3)
+                if (item.SubItems.Count > 3)
+                {
+                    item.SubItems[3].Text = status;
+                }
+
+                // Update background color based on status
+                if (status.Contains("Live") || status.Contains("📊"))
+                {
+                    item.BackColor = Color.FromArgb(200, 255, 200); // Light green for active
+                    item.ForeColor = Color.Black;
+                }
+                else if (status.Contains("Ready") || status.Contains("✅"))
+                {
+                    item.BackColor = Color.FromArgb(255, 255, 220); // Light yellow for ready
+                    item.ForeColor = Color.Black;
+                }
                 else
-                    item.BackColor = Color.FromArgb(255, 255, 220);
+                {
+                    item.BackColor = Color.White;
+                    item.ForeColor = Color.Black;
+                }
             }
+
+            // Force refresh the ListView
+            lvSelected.Refresh();
         }
 
         private void UpdateChannelsCount()
