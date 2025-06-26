@@ -52,7 +52,7 @@ input bool SplitRiskEqually = false; // Split risk equally between TPs
 
 input group "==== TRADE MANAGEMENT ===="
 input bool ForceMarketExecution = true; // Force market execution
-input int MaxSpreadPips = 50; // Maximum allowed spread (pips)
+input int MaxSpreadPips = 100; // Maximum allowed spread (pips)
 input bool IgnoreTradesWithoutSL = false; // Ignore signals without SL
 input bool IgnoreTradesWithoutTP = false; // Ignore signals without TP
 input int MaxRetriesOrderSend = 3; // Maximum retries for order execution
@@ -64,7 +64,7 @@ input bool SkipSignalIfExceeded = false; // Skip signal if tolerance exceeded
 
 
 input group "==== ADVANCED FEATURES ===="
-input bool UseTrailingStop = true; // Enable trailing stop
+input bool UseTrailingStop = false; // Enable trailing stop
 input int TrailingStartPips = 50; // Start trailing after X pips profit
 input int TrailingStepPips = 20; // Trailing step in pips
 input bool MoveSLToBreakeven = true; // Move SL to breakeven
@@ -74,7 +74,7 @@ input int BreakevenPlusPips = 2; // Breakeven + X pips
 input group "==== NOTIFICATIONS ===="
 input bool SendMT5Alerts = true; // Send MT5 alerts
 input bool SendPushNotifications = true; // Send push notifications
-input bool PrintToExpertLog = false; // Print detailed logs
+input bool PrintToExpertLog = true; // Print detailed logs
 input string CommentPrefix = "TelegramEA"; // Trade comment prefix
 
 input group "==== TIME FILTER ===="
@@ -2526,89 +2526,93 @@ void ProcessTrailingStops()
         double currentPrice = (openTrades[i].orderType == ORDER_TYPE_BUY) ? symbolInfo.Bid() : symbolInfo.Ask();
         double point = symbolInfo.Point();
         
-        // Calculate profit in POINTS first
+        // Calculate profit in points from open price
         double profitPoints = 0;
-        
         if(openTrades[i].orderType == ORDER_TYPE_BUY)
         {
-            profitPoints = currentPrice - openTrades[i].openPrice;
+            profitPoints = (currentPrice - openTrades[i].openPrice) / point;
         }
         else // SELL
         {
-            profitPoints = openTrades[i].openPrice - currentPrice;
+            profitPoints = (openTrades[i].openPrice - currentPrice) / point;
         }
         
-        // Convert points to pips properly
-        double profitPips = 0;
-        if(symbolInfo.Digits() == 5 || symbolInfo.Digits() == 3)
+        // Only trail if we have enough profit
+        if(profitPoints >= TrailingStartPips)
         {
-            profitPips = profitPoints / (point * 10); // 5-digit broker: 1 pip = 10 points
-        }
-        else
-        {
-            profitPips = profitPoints / point; // 4-digit broker: 1 pip = 1 point
-        }
-        
-        if(PrintToExpertLog)
-        {
-            Print("📊 Trailing Check #", openTrades[i].ticket, ":");
-            Print("   • Profit: ", DoubleToString(profitPips, 1), " pips");
-            Print("   • Trailing Start: ", TrailingStartPips, " pips");
-        }
-        
-        if(profitPips >= TrailingStartPips)
-        {
-            double newSL = CalculateTrailingSL(openTrades[i], currentPrice, point);
-            
-            // Check if we should update the SL
-            bool shouldUpdate = false;
-            
-            // Convert TrailingStepPips to points for comparison
-            double stepPoints = 0;
-            if(symbolInfo.Digits() == 5 || symbolInfo.Digits() == 3)
-            {
-                stepPoints = TrailingStepPips * point * 10; // 5-digit broker
-            }
-            else
-            {
-                stepPoints = TrailingStepPips * point; // 4-digit broker
-            }
+            double currentSL = positionInfo.StopLoss();
+            double newSL = 0;
             
             if(openTrades[i].orderType == ORDER_TYPE_BUY)
             {
-                // For BUY: new SL must be higher than current SL by at least step size
-                if(newSL > openTrades[i].stopLoss && (newSL - openTrades[i].stopLoss) >= stepPoints)
+                // For BUY: new SL = current price - trailing distance
+                newSL = currentPrice - (TrailingStartPips * point);
+                
+                // Only modify if new SL is better than current SL
+                if(currentSL == 0 || newSL > currentSL)
                 {
-                    shouldUpdate = true;
+                    // Check if we need to move SL (must move by at least TrailingStepPips)
+                    if(currentSL == 0 || (newSL - currentSL) >= TrailingStepPips * point)
+                    {
+                        newSL = symbolInfo.NormalizePrice(newSL);
+                        
+                        if(trade.PositionModify(openTrades[i].ticket, newSL, openTrades[i].takeProfit))
+                        {
+                            openTrades[i].stopLoss = newSL;
+                            openTrades[i].lastTrailingLevel = currentPrice;
+                            
+                            if(PrintToExpertLog)
+                                Print("📈 MT5 Trailing SL updated: Ticket #", openTrades[i].ticket, 
+                                      " (", openTrades[i].originalSymbol, ") | New SL: ", 
+                                      DoubleToString(newSL, symbolInfo.Digits()), 
+                                      " | Profit: ", DoubleToString(profitPoints, 1), " pips");
+                        }
+                        else
+                        {
+                            uint errorCode = trade.ResultRetcode();
+                            string errorDesc = trade.ResultRetcodeDescription();
+                            Print("❌ Failed to trail SL: ", errorDesc, " (", errorCode, ")");
+                        }
+                    }
                 }
             }
             else // SELL
             {
-                // For SELL: new SL must be lower than current SL by at least step size
-                if(newSL < openTrades[i].stopLoss && (openTrades[i].stopLoss - newSL) >= stepPoints)
+                // For SELL: new SL = current price + trailing distance
+                newSL = currentPrice + (TrailingStartPips * point);
+                
+                // Only modify if new SL is better than current SL
+                if(currentSL == 0 || newSL < currentSL)
                 {
-                    shouldUpdate = true;
-                }
-            }
-            
-            if(shouldUpdate)
-            {
-                if(trade.PositionModify(openTrades[i].ticket, newSL, openTrades[i].takeProfit))
-                {
-                    openTrades[i].stopLoss = newSL;
-                    openTrades[i].lastTrailingLevel = currentPrice;
-                    
-                    if(PrintToExpertLog)
+                    // Check if we need to move SL (must move by at least TrailingStepPips)
+                    if(currentSL == 0 || (currentSL - newSL) >= TrailingStepPips * point)
                     {
-                        Print("📈 MT5 Trailing SL updated: Ticket #", openTrades[i].ticket, " (", openTrades[i].originalSymbol, ")");
-                        Print("   • New SL: ", DoubleToString(newSL, symbolInfo.Digits()));
-                        Print("   • Profit: ", DoubleToString(profitPips, 1), " pips");
+                        newSL = symbolInfo.NormalizePrice(newSL);
+                        
+                        if(trade.PositionModify(openTrades[i].ticket, newSL, openTrades[i].takeProfit))
+                        {
+                            openTrades[i].stopLoss = newSL;
+                            openTrades[i].lastTrailingLevel = currentPrice;
+                            
+                            if(PrintToExpertLog)
+                                Print("📈 MT5 Trailing SL updated: Ticket #", openTrades[i].ticket, 
+                                      " (", openTrades[i].originalSymbol, ") | New SL: ", 
+                                      DoubleToString(newSL, symbolInfo.Digits()), 
+                                      " | Profit: ", DoubleToString(profitPoints, 1), " pips");
+                        }
+                        else
+                        {
+                            uint errorCode = trade.ResultRetcode();
+                            string errorDesc = trade.ResultRetcodeDescription();
+                            Print("❌ Failed to trail SL: ", errorDesc, " (", errorCode, ")");
+                        }
                     }
                 }
             }
         }
     }
 }
+
 //+------------------------------------------------------------------+
 //| Calculate trailing stop loss - MT5 VERSION                      |
 //+------------------------------------------------------------------+
@@ -2646,12 +2650,13 @@ double CalculateTrailingSL(TradeInfo &tradeInfo, double currentPrice, double poi
     }
 }
 //+------------------------------------------------------------------+
-//| Process breakeven management - MT5 VERSION                      |
+//| Process breakeven management - FIXED MT5 VERSION                |
 //+------------------------------------------------------------------+
 void ProcessBreakeven()
 {
     for(int i = 0; i < openTradesCount; i++)
     {
+        // Skip if already moved to breakeven
         if(openTrades[i].slMovedToBreakeven)
             continue;
         
@@ -2667,86 +2672,88 @@ void ProcessBreakeven()
         double currentPrice = (openTrades[i].orderType == ORDER_TYPE_BUY) ? symbolInfo.Bid() : symbolInfo.Ask();
         double point = symbolInfo.Point();
         
-        // Calculate profit in POINTS first, then convert to pips
+        // Calculate profit in points
         double profitPoints = 0;
-        
         if(openTrades[i].orderType == ORDER_TYPE_BUY)
         {
-            profitPoints = currentPrice - openTrades[i].openPrice;
+            profitPoints = (currentPrice - openTrades[i].openPrice) / point;
         }
         else // SELL
         {
-            profitPoints = openTrades[i].openPrice - currentPrice;
+            profitPoints = (openTrades[i].openPrice - currentPrice) / point;
         }
         
-        // Convert points to pips (for 5-digit brokers, 1 pip = 10 points)
-        double profitPips = 0;
-        if(symbolInfo.Digits() == 5 || symbolInfo.Digits() == 3)
+        // Check if profit is enough to move to breakeven
+        if(profitPoints >= BreakevenAfterPips)
         {
-            profitPips = profitPoints / (point * 10); // 5-digit broker
-        }
-        else
-        {
-            profitPips = profitPoints / point; // 4-digit broker
-        }
-        
-        if(PrintToExpertLog)
-        {
-            Print("🔍 MT5 Breakeven Check for #", openTrades[i].ticket, ":");
-            Print("   • Symbol: ", symbol, " (", symbolInfo.Digits(), " digits)");
-            Print("   • Open Price: ", DoubleToString(openTrades[i].openPrice, symbolInfo.Digits()));
-            Print("   • Current Price: ", DoubleToString(currentPrice, symbolInfo.Digits()));
-            Print("   • Profit Points: ", DoubleToString(profitPoints, symbolInfo.Digits()));
-            Print("   • Profit Pips: ", DoubleToString(profitPips, 1));
-            Print("   • Breakeven Trigger: ", BreakevenAfterPips, " pips");
-        }
-        
-        if(profitPips >= BreakevenAfterPips)
-        {
-            // Calculate new SL at breakeven + specified pips
-            double breakevenPips = BreakevenPlusPips;
-            double breakevenPoints = 0;
-            
-            // Convert pips to points based on broker digits
-            if(symbolInfo.Digits() == 5 || symbolInfo.Digits() == 3)
-            {
-                breakevenPoints = breakevenPips * point * 10; // 5-digit broker
-            }
-            else
-            {
-                breakevenPoints = breakevenPips * point; // 4-digit broker
-            }
-            
             double newSL = 0;
+            double currentSL = positionInfo.StopLoss();
             
             if(openTrades[i].orderType == ORDER_TYPE_BUY)
             {
-                newSL = openTrades[i].openPrice + breakevenPoints;
+                // For BUY: breakeven + plus pips
+                newSL = openTrades[i].openPrice + (BreakevenPlusPips * point);
+                
+                // Make sure new SL is better than current SL
+                if(currentSL == 0 || newSL > currentSL)
+                {
+                    newSL = symbolInfo.NormalizePrice(newSL);
+                    
+                    if(trade.PositionModify(openTrades[i].ticket, newSL, openTrades[i].takeProfit))
+                    {
+                        openTrades[i].stopLoss = newSL;
+                        openTrades[i].slMovedToBreakeven = true;
+                        
+                        if(PrintToExpertLog)
+                            Print("⚖️ MT5 Breakeven set: Ticket #", openTrades[i].ticket, 
+                                  " (", openTrades[i].originalSymbol, ") | SL moved to: ", 
+                                  DoubleToString(newSL, symbolInfo.Digits()), 
+                                  " (Entry + ", BreakevenPlusPips, " pips)");
+                        
+                        if(SendMT5Alerts)
+                            Alert("⚖️ MT5 Breakeven: " + openTrades[i].originalSymbol + 
+                                  " | Ticket #" + IntegerToString((int)openTrades[i].ticket));
+                    }
+                    else
+                    {
+                        uint errorCode = trade.ResultRetcode();
+                        string errorDesc = trade.ResultRetcodeDescription();
+                        Print("❌ Failed to set breakeven: ", errorDesc, " (", errorCode, ")");
+                    }
+                }
             }
             else // SELL
             {
-                newSL = openTrades[i].openPrice - breakevenPoints;
-            }
-            
-            // Normalize the SL price
-            newSL = symbolInfo.NormalizePrice(newSL);
-            
-            if(PrintToExpertLog)
-            {
-                Print("💚 MT5 Moving to breakeven + ", BreakevenPlusPips, " pips:");
-                Print("   • New SL: ", DoubleToString(newSL, symbolInfo.Digits()));
-            }
-            
-            if(trade.PositionModify(openTrades[i].ticket, newSL, openTrades[i].takeProfit))
-            {
-                openTrades[i].stopLoss = newSL;
-                openTrades[i].slMovedToBreakeven = true;
+                // For SELL: breakeven - plus pips
+                newSL = openTrades[i].openPrice - (BreakevenPlusPips * point);
                 
-                if(PrintToExpertLog)
-                    Print("⚖️ MT5 Breakeven set: Ticket #", openTrades[i].ticket, " (", openTrades[i].originalSymbol, ") | SL moved to: ", DoubleToString(newSL, symbolInfo.Digits()));
-                
-                if(SendMT5Alerts)
-                    Alert("⚖️ MT5 Breakeven: " + openTrades[i].originalSymbol + " | Ticket #" + IntegerToString((int)openTrades[i].ticket));
+                // Make sure new SL is better than current SL
+                if(currentSL == 0 || newSL < currentSL)
+                {
+                    newSL = symbolInfo.NormalizePrice(newSL);
+                    
+                    if(trade.PositionModify(openTrades[i].ticket, newSL, openTrades[i].takeProfit))
+                    {
+                        openTrades[i].stopLoss = newSL;
+                        openTrades[i].slMovedToBreakeven = true;
+                        
+                        if(PrintToExpertLog)
+                            Print("⚖️ MT5 Breakeven set: Ticket #", openTrades[i].ticket, 
+                                  " (", openTrades[i].originalSymbol, ") | SL moved to: ", 
+                                  DoubleToString(newSL, symbolInfo.Digits()), 
+                                  " (Entry - ", BreakevenPlusPips, " pips)");
+                        
+                        if(SendMT5Alerts)
+                            Alert("⚖️ MT5 Breakeven: " + openTrades[i].originalSymbol + 
+                                  " | Ticket #" + IntegerToString((int)openTrades[i].ticket));
+                    }
+                    else
+                    {
+                        uint errorCode = trade.ResultRetcode();
+                        string errorDesc = trade.ResultRetcodeDescription();
+                        Print("❌ Failed to set breakeven: ", errorDesc, " (", errorCode, ")");
+                    }
+                }
             }
         }
     }
@@ -2777,6 +2784,63 @@ void CleanupClosedPositions()
    }
 }
 
+void DisplayTrailingStatus()
+{
+    if(!PrintToExpertLog || openTradesCount == 0)
+        return;
+        
+    Print("═══════════════════════════════════════════════");
+    Print("📊 TRAILING STOP & BREAKEVEN STATUS:");
+    Print("═══════════════════════════════════════════════");
+    
+    for(int i = 0; i < openTradesCount; i++)
+    {
+        if(!positionInfo.SelectByTicket(openTrades[i].ticket))
+            continue;
+            
+        string symbol = openTrades[i].symbol;
+        if(!symbolInfo.Name(symbol))
+            continue;
+            
+        symbolInfo.RefreshRates();
+        
+        double currentPrice = (openTrades[i].orderType == ORDER_TYPE_BUY) ? symbolInfo.Bid() : symbolInfo.Ask();
+        double point = symbolInfo.Point();
+        
+        // Calculate profit in points
+        double profitPoints = 0;
+        if(openTrades[i].orderType == ORDER_TYPE_BUY)
+        {
+            profitPoints = (currentPrice - openTrades[i].openPrice) / point;
+        }
+        else
+        {
+            profitPoints = (openTrades[i].openPrice - currentPrice) / point;
+        }
+        
+        string status = "";
+        if(openTrades[i].slMovedToBreakeven)
+        {
+            status = "✅ Breakeven Active";
+        }
+        else if(profitPoints >= TrailingStartPips)
+        {
+            status = "📈 Trailing Active";
+        }
+        else if(profitPoints >= BreakevenAfterPips)
+        {
+            status = "⏳ Ready for Breakeven";
+        }
+        else
+        {
+            status = "⏸️ Waiting (" + DoubleToString(profitPoints, 1) + " pips)";
+        }
+        
+        Print("• Ticket #", openTrades[i].ticket, " (", openTrades[i].originalSymbol, "): ", status);
+    }
+    
+    Print("═══════════════════════════════════════════════");
+}
 //+------------------------------------------------------------------+
 //| Check if it's time to trade                                     |
 //+------------------------------------------------------------------+

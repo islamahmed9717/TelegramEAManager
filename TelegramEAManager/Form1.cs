@@ -409,12 +409,11 @@ namespace TelegramEAManager
             telegramService = new TelegramService();
             signalProcessor = new SignalProcessingService();
 
-            // Subscribe to real-time message events
+            // Update to use the new event signature with timestamp
             telegramService.NewMessageReceived += TelegramService_NewMessageReceived;
             telegramService.ErrorOccurred += TelegramService_ErrorOccurred;
-            telegramService.DebugMessage += TelegramService_DebugMessage; // Add this
+            telegramService.DebugMessage += TelegramService_DebugMessage;
 
-            // Subscribe to signal processing events
             signalProcessor.SignalProcessed += SignalProcessor_SignalProcessed;
             signalProcessor.ErrorOccurred += SignalProcessor_ErrorOccurred;
         }
@@ -568,33 +567,42 @@ namespace TelegramEAManager
             }
         }
 
-        private void TelegramService_NewMessageReceived(object? sender, (string message, long channelId, string channelName) e)
+        private void TelegramService_NewMessageReceived(object? sender, (string message, long channelId, string channelName, DateTime messageTime) e)
         {
             try
             {
-                // Process the message in the signal processor
-                var processedSignal = signalProcessor.ProcessTelegramMessage(e.message, e.channelId, e.channelName);
+                // Process the message with its actual timestamp
+                var processedSignal = signalProcessor.ProcessTelegramMessage(e.message, e.channelId, e.channelName, e.messageTime);
 
                 // Update UI on main thread
                 if (this.InvokeRequired)
                 {
                     this.Invoke(new Action(() => {
-                        AddToLiveSignals(processedSignal);
-                        allSignals.Add(processedSignal);
-                        LogMessage($"📨 New message from {e.channelName}: {processedSignal.Status}");
-
-                        // Update signal counts in selected channels
-                        UpdateSelectedChannelsSignalCounts();
+                        // Only add non-expired signals to the UI
+                        if (!processedSignal.Status.Contains("Expired"))
+                        {
+                            AddToLiveSignals(processedSignal);
+                            allSignals.Add(processedSignal);
+                            LogMessage($"📨 New message from {e.channelName} at {e.messageTime:HH:mm:ss}: {processedSignal.Status}");
+                        }
+                        else
+                        {
+                            LogMessage($"⏰ Expired signal from {e.channelName}: {(DateTime.UtcNow - e.messageTime).TotalMinutes:F1} minutes old");
+                        }
                     }));
                 }
                 else
                 {
-                    AddToLiveSignals(processedSignal);
-                    allSignals.Add(processedSignal);
-                    LogMessage($"📨 New message from {e.channelName}: {processedSignal.Status}");
-
-                    // Update signal counts in selected channels
-                    UpdateSelectedChannelsSignalCounts();
+                    if (!processedSignal.Status.Contains("Expired"))
+                    {
+                        AddToLiveSignals(processedSignal);
+                        allSignals.Add(processedSignal);
+                        LogMessage($"📨 New message from {e.channelName} at {e.messageTime:HH:mm:ss}: {processedSignal.Status}");
+                    }
+                    else
+                    {
+                        LogMessage($"⏰ Expired signal from {e.channelName}: {(DateTime.UtcNow - e.messageTime).TotalMinutes:F1} minutes old");
+                    }
                 }
             }
             catch (Exception ex)
@@ -2032,8 +2040,13 @@ TP 149.50"
                 var random = new Random();
                 var testMessage = testScenarios[random.Next(testScenarios.Length)];
 
-                // Process the test message with CURRENT timestamp (as it's a real-time test)
-                var processedSignal = signalProcessor.ProcessTelegramMessage(testMessage, 999999, "TEST_CHANNEL");
+                // FIX: Process the test message with current timestamp
+                var processedSignal = signalProcessor.ProcessTelegramMessage(
+                    testMessage,
+                    999999,
+                    "TEST_CHANNEL",
+                    DateTime.UtcNow  // Add the timestamp parameter
+                );
 
                 // Add to signals history and UI
                 allSignals.Add(processedSignal);
@@ -2057,7 +2070,7 @@ TP 149.50"
                             $"📝 Status: {processedSignal.Status}\n" +
                             $"📁 File Written: {(fileWritten ? "YES ✅" : "NO ❌")}\n" +
                             $"📏 File Size: {fileSize} bytes\n" +
-                            $"🕒 Timestamp: {processedSignal.DateTime:yyyy.MM.dd HH:mm:ss} UTC\n\n" +
+                            $"🕒 Timestamp: {DateTime.UtcNow:yyyy.MM.dd HH:mm:ss} UTC\n\n" +
                             $"📄 Last Line in File:\n{lastLine}\n\n" +
                             $"💡 Now check your EA - it should process this signal immediately!",
                             "Test Signal Complete",
@@ -2068,7 +2081,6 @@ TP 149.50"
                 ShowMessage($"❌ Failed to process test signal:\n\n{ex.Message}", "Test Failed", MessageBoxIcon.Error);
             }
         }
-
 
         protected override void OnFormClosing(FormClosingEventArgs e)
         {

@@ -78,13 +78,19 @@ namespace TelegramEAManager
         /// </summary>
         public ProcessedSignal ProcessTelegramMessage(string messageText, long channelId, string channelName)
         {
-            // IMPORTANT: Use the ACTUAL time the message was received, not processing time
-            var actualReceiveTime = DateTime.Now;
+            // Call the main method with current UTC time
+            return ProcessTelegramMessage(messageText, channelId, channelName, DateTime.Now);
+        }
 
+        /// <summary>
+        /// Process a raw Telegram message with actual timestamp
+        /// </summary>
+        public ProcessedSignal ProcessTelegramMessage(string messageText, long channelId, string channelName, DateTime actualMessageTime)
+        {
             var signal = new ProcessedSignal
             {
                 Id = Guid.NewGuid().ToString(),
-                DateTime = actualReceiveTime, // Use actual receive time
+                DateTime = actualMessageTime, // Use actual message time from Telegram
                 ChannelId = channelId,
                 ChannelName = channelName,
                 OriginalText = messageText,
@@ -93,6 +99,17 @@ namespace TelegramEAManager
 
             try
             {
+                // Check signal age BEFORE processing
+                var signalAge = DateTime.UtcNow - actualMessageTime;
+                var maxSignalAgeMinutes = 10; // Should match your EA setting
+
+                if (signalAge.TotalMinutes > maxSignalAgeMinutes)
+                {
+                    signal.Status = $"Expired - Signal is {signalAge.TotalMinutes:F1} minutes old (max: {maxSignalAgeMinutes})";
+                    OnDebugMessage($"Skipping expired signal: {signalAge.TotalMinutes:F1} minutes old");
+                    return signal;
+                }
+
                 // Parse the message for trading signals
                 var parsedData = ParseTradingSignal(messageText);
                 if (parsedData != null)
@@ -105,8 +122,8 @@ namespace TelegramEAManager
                     // Validate signal
                     if (ValidateSignal(signal.ParsedData))
                     {
-                        // Write to EA file with ACTUAL timestamp
-                        WriteSignalToEAFile(signal, actualReceiveTime);
+                        // Write to EA file with proper timestamp
+                        WriteSignalToEAFile(signal);
                         signal.Status = "Processed - Sent to EA";
 
                         // Add to history
@@ -134,6 +151,7 @@ namespace TelegramEAManager
 
             return signal;
         }
+
         private void WriteSignalToEAFile(ProcessedSignal signal, DateTime actualTimestamp)
         {
             if (string.IsNullOrEmpty(eaSettings.MT4FilesPath))
@@ -160,7 +178,7 @@ namespace TelegramEAManager
                 return;
             }
 
-            var signalText = FormatSignalForEA(signal, actualTimestamp);
+            var signalText = FormatSignalForEA(signal);
 
             // Write with retry mechanism
             var maxRetries = 3;
@@ -209,11 +227,14 @@ namespace TelegramEAManager
                 }
             }
         }
-        private string FormatSignalForEA(ProcessedSignal signal, DateTime actualTimestamp)
+        private string FormatSignalForEA(ProcessedSignal signal)
         {
-            // Use the ACTUAL timestamp, not current time
+            // IMPORTANT: Always use UTC for consistency
+            // The signal.DateTime should already be in UTC from Telegram
+            var signalTimeUtc = DateTime.Now;
+
             // Format: TIMESTAMP|CHANNEL_ID|CHANNEL_NAME|DIRECTION|SYMBOL|ENTRY|SL|TP1|TP2|TP3|STATUS
-            var formatted = $"{actualTimestamp:yyyy.MM.dd HH:mm:ss}|" +
+            var formatted = $"{signalTimeUtc:yyyy.MM.dd HH:mm:ss}|" +  // Always write UTC time
                             $"{signal.ChannelId}|" +
                             $"{signal.ChannelName}|" +
                             $"{signal.ParsedData?.Direction ?? "BUY"}|" +
@@ -225,8 +246,12 @@ namespace TelegramEAManager
                             $"{(signal.ParsedData?.TakeProfit3 ?? 0):F5}|" +
                             $"NEW";
 
-            // Debug log with actual timestamp
-            Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Writing signal with timestamp: {actualTimestamp:yyyy.MM.dd HH:mm:ss} - {signal.ParsedData?.Symbol} {signal.ParsedData?.Direction}");
+            // Debug log with both UTC and local time
+            var localTime = signalTimeUtc.ToLocalTime();
+            Console.WriteLine($"[{DateTime.UtcNow:HH:mm:ss} UTC] Writing signal:");
+            Console.WriteLine($"  Signal UTC time: {signalTimeUtc:yyyy-MM-dd HH:mm:ss}");
+            Console.WriteLine($"  Signal local time: {localTime:yyyy-MM-dd HH:mm:ss}");
+            Console.WriteLine($"  Symbol: {signal.ParsedData?.Symbol} {signal.ParsedData?.Direction}");
 
             return formatted;
         }
@@ -480,15 +505,14 @@ namespace TelegramEAManager
 
             var filePath = Path.Combine(eaSettings.MT4FilesPath, "telegram_signals.txt");
 
-            // Ensure directory exists
+            // FIX: Ensure directory exists with proper null check
             var directory = Path.GetDirectoryName(filePath);
-            if (!string.IsNullOrEmpty(directory))
+            if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
             {
                 Directory.CreateDirectory(directory);
             }
 
             var signalText = FormatSignalForEA(signal);
-            Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] About to write signal: {signalText}");
 
             // Write with retry mechanism
             var maxRetries = 3;
@@ -503,14 +527,11 @@ namespace TelegramEAManager
                         // Read existing content to check for duplicates
                         var existingLines = File.Exists(filePath) ? File.ReadAllLines(filePath).ToList() : new List<string>();
 
-                        // Check if this exact signal already exists (check by channel + symbol + direction + time)
-                        var signalKey = $"|{signal.ChannelId}|{signal.ChannelName}|{signal.ParsedData?.Direction}|{signal.ParsedData?.Symbol}|";
-                        bool isDuplicate = existingLines.Any(line =>
-                            line.Contains(signalKey) &&
-                            line.EndsWith("|NEW") &&
-                            !line.StartsWith("#"));
-
-                        if (!isDuplicate)
+                        // Check if this exact signal already exists
+                        if (!existingLines.Any(line => line.Contains($"|{signal.ChannelId}|") &&
+                                                       line.Contains($"|{signal.ParsedData?.Symbol ?? ""}|") &&
+                                                       line.Contains($"|{signal.ParsedData?.Direction ?? ""}|") &&
+                                                       !line.EndsWith("|PROCESSED")))
                         {
                             using (var fs = new FileStream(
                                 filePath,
@@ -523,8 +544,6 @@ namespace TelegramEAManager
                             {
                                 writer.WriteLine(signalText);
                             }
-
-                            Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Signal written successfully to: {filePath}");
                         }
                         else
                         {
@@ -610,29 +629,7 @@ namespace TelegramEAManager
         /// <summary>
         /// Format signal for EA with proper field order and formatting
         /// </summary>
-        private string FormatSignalForEA(ProcessedSignal signal)
-        {
-            var utcTime = DateTime.Now;
 
-            // FIXED FORMAT: TIMESTAMP|CHANNEL_ID|CHANNEL_NAME|DIRECTION|SYMBOL|ENTRY|SL|TP1|TP2|TP3|STATUS
-            var formatted = $"{utcTime:yyyy.MM.dd HH:mm:ss}|" +
-                            $"{signal.ChannelId}|" +
-                            $"{signal.ChannelName}|" +
-                            $"{signal.ParsedData?.Direction ?? "BUY"}|" +
-                            $"{signal.ParsedData?.FinalSymbol ?? signal.ParsedData?.Symbol ?? "EURUSD"}|" +
-                            $"{(signal.ParsedData?.EntryPrice ?? 0):F5}|" +
-                            $"{(signal.ParsedData?.StopLoss ?? 0):F5}|" +
-                            $"{(signal.ParsedData?.TakeProfit1 ?? 0):F5}|" +
-                            $"{(signal.ParsedData?.TakeProfit2 ?? 0):F5}|" +
-                            $"{(signal.ParsedData?.TakeProfit3 ?? 0):F5}|" +
-                            $"NEW";
-
-            // Debug log with UTC time
-            Console.WriteLine($"[{utcTime:HH:mm:ss} UTC] Writing signal: {signal.ParsedData?.Symbol} {signal.ParsedData?.Direction}");
-            Console.WriteLine($"[{utcTime:HH:mm:ss} UTC] Formatted line: {formatted}");
-
-            return formatted;
-        }
         // ... rest of the existing methods remain the same ...
         private string GenerateSignalHash(string channelId, string symbol, string direction, DateTime timestamp)
         {
@@ -798,7 +795,7 @@ namespace TelegramEAManager
 
         protected virtual void OnDebugMessage(string message)
         {
-            DebugMessage?.Invoke(this, message);
+            Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] {message}");
         }
     }
 }

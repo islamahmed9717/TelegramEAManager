@@ -25,7 +25,8 @@ namespace TelegramEAManager
         private bool isMonitoring = false;
 
         // Events for real-time message processing
-        public event EventHandler<(string message, long channelId, string channelName)>? NewMessageReceived;
+        public event EventHandler<(string message, long channelId, string channelName, DateTime messageTime)>? NewMessageReceived;
+
         public event EventHandler<string>? ErrorOccurred;
         public event EventHandler<string>? DebugMessage; // Add debug event
 
@@ -571,30 +572,47 @@ STEP 7: 📋 Copy the api_id (numbers) and api_hash (long string) below"
 
                 // Set up monitored channels
                 monitoredChannels.Clear();
-                foreach (var channel in channels)
+
+                // Initialize lastMessageIds asynchronously
+                Task.Run(async () =>
                 {
-                    monitoredChannels.Add(channel.Id);
-                    if (!lastMessageIds.ContainsKey(channel.Id))
+                    foreach (var channel in channels)
                     {
-                        lastMessageIds[channel.Id] = 0;
+                        monitoredChannels.Add(channel.Id);
+
+                        // Get the latest message ID for this channel
+                        try
+                        {
+                            var latestMessageId = await GetLatestMessageId(channel.Id, channel.AccessHash);
+                            lastMessageIds[channel.Id] = latestMessageId;
+                            OnDebugMessage($"Initialized channel {channel.Title} with latest message ID: {latestMessageId}");
+                        }
+                        catch (Exception ex)
+                        {
+                            OnDebugMessage($"Failed to get latest message ID for {channel.Title}: {ex.Message}");
+                            lastMessageIds[channel.Id] = 0;
+                        }
                     }
-                    OnDebugMessage($"Monitoring channel: {channel.Title} (ID: {channel.Id})");
-                }
 
-                isMonitoring = true;
+                    isMonitoring = true;
 
-                // Start with immediate check
-                Task.Run(async () => await PollAllChannelsAsync());
+                    // Start polling timer after initialization is complete
+                    messagePollingTimer = new System.Threading.Timer(
+                        async _ => await PollAllChannelsAsync(),
+                        null,
+                        TimeSpan.FromSeconds(5), // Start after 5 seconds to ensure proper initialization
+                        TimeSpan.FromSeconds(2)
+                    );
 
-                // Start polling timer (check every 2 seconds for better responsiveness)
-                messagePollingTimer = new System.Threading.Timer(
-                    async _ => await PollAllChannelsAsync(),
-                    null,
-                    TimeSpan.FromSeconds(2),
-                    TimeSpan.FromSeconds(2)
-                );
-
-                OnDebugMessage("Monitoring started successfully");
+                    OnDebugMessage("Monitoring started successfully - will only process NEW messages from now");
+                }).ContinueWith(task =>
+                {
+                    if (task.IsFaulted)
+                    {
+                        OnErrorOccurred($"Failed to start monitoring: {task.Exception?.GetBaseException().Message}");
+                        OnDebugMessage($"Monitoring error: {task.Exception}");
+                    }
+                });
             }
             catch (Exception ex)
             {
@@ -603,6 +621,31 @@ STEP 7: 📋 Copy the api_id (numbers) and api_hash (long string) below"
             }
         }
 
+        private async Task<int> GetLatestMessageId(long channelId, long accessHash)
+        {
+            if (client == null) return 0;
+
+            try
+            {
+                var dialogs = await client.Messages_GetAllDialogs();
+                var channel = dialogs.chats.Values.OfType<Channel>().FirstOrDefault(c => c.ID == channelId);
+
+                if (channel != null)
+                {
+                    var inputChannel = new InputChannel(channelId, channel.access_hash);
+                    var history = await client.Messages_GetHistory(inputChannel, limit: 1);
+
+                    var latestMessage = history.Messages.OfType<TL.Message>().FirstOrDefault();
+                    return latestMessage?.ID ?? 0;
+                }
+            }
+            catch (Exception ex)
+            {
+                OnDebugMessage($"Error getting latest message ID: {ex.Message}");
+            }
+
+            return 0;
+        }
 
         /// <summary>
         /// Stop monitoring channels
@@ -673,21 +716,36 @@ STEP 7: 📋 Copy the api_id (numbers) and api_hash (long string) below"
                     OnDebugMessage($"Found channel: {channel.Title}");
 
                     var inputChannel = new InputChannel(channelId, channel.access_hash);
-                    var history = await client.Messages_GetHistory(inputChannel, limit: 20); // Get more messages
+                    var history = await client.Messages_GetHistory(inputChannel, limit: 20);
 
                     var lastKnownId = lastMessageIds.GetValueOrDefault(channelId, 0);
                     OnDebugMessage($"Last known message ID for {channel.Title}: {lastKnownId}");
+
+                    // CRITICAL FIX: Get the maximum age for signals from EA settings
+                    int maxSignalAgeMinutes = 10; // Default to 10 minutes (matching your EA setting)
 
                     var newMessages = 0;
                     foreach (var message in history.Messages.OfType<TL.Message>().OrderBy(m => m.ID))
                     {
                         if (message.ID > lastKnownId && !string.IsNullOrEmpty(message.message))
                         {
-                            newMessages++;
-                            OnDebugMessage($"New message in {channel.Title}: ID={message.ID}, Length={message.message.Length}");
+                            // CRITICAL: Check message age before processing
+                            var messageAge = DateTime.UtcNow - message.Date;
 
-                            // New message found - trigger event
-                            OnNewMessageReceived(message.message, channelId, channel.Title ?? $"Channel_{channelId}");
+                            if (messageAge.TotalMinutes <= maxSignalAgeMinutes)
+                            {
+                                newMessages++;
+                                OnDebugMessage($"New message in {channel.Title}: ID={message.ID}, Age={messageAge.TotalMinutes:F1} minutes");
+
+                                // Pass the ACTUAL message timestamp
+                                OnNewMessageReceived(message.message, channelId, channel.Title ?? $"Channel_{channelId}", message.Date);
+                            }
+                            else
+                            {
+                                OnDebugMessage($"Skipping old message: ID={message.ID}, Age={messageAge.TotalMinutes:F1} minutes (max: {maxSignalAgeMinutes})");
+                            }
+
+                            // Update lastKnownId even for old messages to prevent reprocessing
                             lastMessageIds[channelId] = message.ID;
                         }
                     }
@@ -703,7 +761,7 @@ STEP 7: 📋 Copy the api_id (numbers) and api_hash (long string) below"
                     var chat = dialogs.chats.Values.FirstOrDefault(c => c.ID == channelId);
                     if (chat != null)
                     {
-                        // Fixed: Get display name based on chat type
+                        // Get display name based on chat type
                         string chatName = "";
                         if (chat is Chat regularChatObj)
                         {
@@ -724,7 +782,7 @@ STEP 7: 📋 Copy the api_id (numbers) and api_hash (long string) below"
                             OnDebugMessage($"Found user: {chatName}");
                         }
 
-                        // Fixed: Create input peer based on actual type
+                        // Create input peer based on actual type
                         InputPeer? inputPeer = null;
 
                         if (chat is Channel channelObj2)
@@ -745,12 +803,26 @@ STEP 7: 📋 Copy the api_id (numbers) and api_hash (long string) below"
                             var history = await client.Messages_GetHistory(inputPeer, limit: 20);
                             var lastKnownId = lastMessageIds.GetValueOrDefault(channelId, 0);
 
+                            // Maximum age for signals
+                            int maxSignalAgeMinutes = 10;
+
                             foreach (var message in history.Messages.OfType<TL.Message>().OrderBy(m => m.ID))
                             {
                                 if (message.ID > lastKnownId && !string.IsNullOrEmpty(message.message))
                                 {
-                                    OnDebugMessage($"New message: {message.message.Substring(0, Math.Min(50, message.message.Length))}...");
-                                    OnNewMessageReceived(message.message, channelId, chatName);
+                                    // Check message age
+                                    var messageAge = DateTime.UtcNow - message.Date;
+
+                                    if (messageAge.TotalMinutes <= maxSignalAgeMinutes)
+                                    {
+                                        OnDebugMessage($"New message: {message.message.Substring(0, Math.Min(50, message.message.Length))}...");
+                                        OnNewMessageReceived(message.message, channelId, chatName, message.Date);
+                                    }
+                                    else
+                                    {
+                                        OnDebugMessage($"Skipping old message from {chatName}: Age={messageAge.TotalMinutes:F1} minutes");
+                                    }
+
                                     lastMessageIds[channelId] = message.ID;
                                 }
                             }
@@ -773,10 +845,13 @@ STEP 7: 📋 Copy the api_id (numbers) and api_hash (long string) below"
             DebugMessage?.Invoke(this, $"[{DateTime.Now:HH:mm:ss}] {message}");
         }
 
-        protected virtual void OnNewMessageReceived(string message, long channelId, string channelName)
+        protected virtual void OnNewMessageReceived(string message, long channelId, string channelName, DateTime messageTime = default)
         {
-            OnDebugMessage($"Message received from {channelName}: {message.Substring(0, Math.Min(100, message.Length))}...");
-            NewMessageReceived?.Invoke(this, (message, channelId, channelName));
+            // Use actual message time if provided, otherwise use current time
+            var actualTime = messageTime != default ? messageTime : DateTime.Now;
+
+            OnDebugMessage($"Message received from {channelName} at {actualTime:yyyy-MM-dd HH:mm:ss} UTC");
+            NewMessageReceived?.Invoke(this, (message, channelId, channelName, actualTime));
         }
 
         protected virtual void OnErrorOccurred(string error)
@@ -834,9 +909,9 @@ STEP 7: 📋 Copy the api_id (numbers) and api_hash (long string) below"
         /// <summary>
         /// Event handlers
         /// </summary>
-     
 
-      
+
+
 
         public void Dispose()
         {
