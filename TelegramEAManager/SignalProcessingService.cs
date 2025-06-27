@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using Newtonsoft.Json;
 using System.Text.RegularExpressions;
 using System.Threading;
+using System.Collections.Concurrent;
 
 namespace TelegramEAManager
 {
@@ -15,8 +16,12 @@ namespace TelegramEAManager
         private EASettings eaSettings = new EASettings();
         private List<ProcessedSignal> processedSignals = new List<ProcessedSignal>();
         private readonly string signalsHistoryFile = "signals_history.json";
-        private readonly HashSet<string> writtenSignalIds = new HashSet<string>(); // Track written signals
         private readonly object fileLock = new object();
+
+        // CRITICAL: Track processed messages to avoid duplicates
+        private readonly ConcurrentDictionary<string, DateTime> processedMessageHashes = new ConcurrentDictionary<string, DateTime>();
+        private readonly SemaphoreSlim fileWriteSemaphore = new SemaphoreSlim(1, 1);
+        private DateTime lastCleanupTime = DateTime.Now;
 
         // Events
         public event EventHandler<ProcessedSignal>? SignalProcessed;
@@ -33,7 +38,16 @@ namespace TelegramEAManager
 
 
         }
-
+        private string GenerateMessageHash(string messageText, long channelId)
+        {
+            // Create a more unique identifier using actual content hash
+            using (var md5 = System.Security.Cryptography.MD5.Create())
+            {
+                var inputBytes = System.Text.Encoding.UTF8.GetBytes($"{channelId}_{messageText}");
+                var hashBytes = md5.ComputeHash(inputBytes);
+                return Convert.ToBase64String(hashBytes);
+            }
+        }
         /// <summary>
         /// Clear signal file on startup to prevent old signals from being processed
         /// </summary>
@@ -68,29 +82,43 @@ namespace TelegramEAManager
                 OnErrorOccurred($"Failed to clear signal file on startup: {ex.Message}");
             }
         }
-
-        /// <summary>
-        /// Process a raw Telegram message and extract trading signals
-        /// </summary>
-        // Update ProcessTelegramMessage method
-        /// <summary>
-        /// Process a raw Telegram message and extract trading signals
-        /// </summary>
         public ProcessedSignal ProcessTelegramMessage(string messageText, long channelId, string channelName)
         {
-            // Call the main method with current UTC time
-            return ProcessTelegramMessage(messageText, channelId, channelName, DateTime.Now);
-        }
+            // Generate message hash to check for duplicates
+            var messageHash = GenerateMessageHash(messageText, channelId);
 
-        /// <summary>
-        /// Process a raw Telegram message with actual timestamp
-        /// </summary>
-        public ProcessedSignal ProcessTelegramMessage(string messageText, long channelId, string channelName, DateTime actualMessageTime)
-        {
+            // Check if we've already processed this message recently (within 5 minutes)
+            if (processedMessageHashes.TryGetValue(messageHash, out DateTime processedTime))
+            {
+                if ((DateTime.Now - processedTime).TotalMinutes < 5)
+                {
+                    // Return a dummy signal indicating it's a duplicate
+                    return new ProcessedSignal
+                    {
+                        Id = Guid.NewGuid().ToString(),
+                        DateTime = DateTime.Now,
+                        ChannelId = channelId,
+                        ChannelName = channelName,
+                        OriginalText = messageText,
+                        Status = "Duplicate - Already processed"
+                    };
+                }
+            }
+
+            // Mark this message as processed
+            processedMessageHashes[messageHash] = DateTime.Now;
+
+            // Clean up old message hashes periodically
+            if ((DateTime.Now - lastCleanupTime).TotalMinutes > 10)
+            {
+                CleanupOldMessageHashes();
+                lastCleanupTime = DateTime.Now;
+            }
+
             var signal = new ProcessedSignal
             {
                 Id = Guid.NewGuid().ToString(),
-                DateTime = actualMessageTime, // Use actual message time from Telegram
+                DateTime = DateTime.Now,
                 ChannelId = channelId,
                 ChannelName = channelName,
                 OriginalText = messageText,
@@ -99,17 +127,6 @@ namespace TelegramEAManager
 
             try
             {
-                // Check signal age BEFORE processing
-                var signalAge = DateTime.UtcNow - actualMessageTime;
-                var maxSignalAgeMinutes = 10; // Should match your EA setting
-
-                if (signalAge.TotalMinutes > maxSignalAgeMinutes)
-                {
-                    signal.Status = $"Expired - Signal is {signalAge.TotalMinutes:F1} minutes old (max: {maxSignalAgeMinutes})";
-                    OnDebugMessage($"Skipping expired signal: {signalAge.TotalMinutes:F1} minutes old");
-                    return signal;
-                }
-
                 // Parse the message for trading signals
                 var parsedData = ParseTradingSignal(messageText);
                 if (parsedData != null)
@@ -122,13 +139,24 @@ namespace TelegramEAManager
                     // Validate signal
                     if (ValidateSignal(signal.ParsedData))
                     {
-                        // Write to EA file with proper timestamp
-                        WriteSignalToEAFile(signal);
+                        // Write to EA file asynchronously to avoid blocking
+                        Task.Run(async () => await WriteSignalToEAFileAsync(signal));
+
                         signal.Status = "Processed - Sent to EA";
 
                         // Add to history
-                        processedSignals.Add(signal);
-                        SaveSignalsHistory();
+                        lock (processedSignals)
+                        {
+                            processedSignals.Add(signal);
+                            // Keep only last 1000 signals in memory
+                            if (processedSignals.Count > 1000)
+                            {
+                                processedSignals.RemoveRange(0, processedSignals.Count - 1000);
+                            }
+                        }
+
+                        // Save history asynchronously
+                        Task.Run(async () => await SaveSignalsHistoryAsync());
 
                         OnSignalProcessed(signal);
                     }
@@ -151,8 +179,20 @@ namespace TelegramEAManager
 
             return signal;
         }
+        private void CleanupOldMessageHashes()
+        {
+            var cutoffTime = DateTime.Now.AddMinutes(-10);
+            var keysToRemove = processedMessageHashes
+                .Where(kvp => kvp.Value < cutoffTime)
+                .Select(kvp => kvp.Key)
+                .ToList();
 
-        private void WriteSignalToEAFile(ProcessedSignal signal, DateTime actualTimestamp)
+            foreach (var key in keysToRemove)
+            {
+                processedMessageHashes.TryRemove(key, out _);
+            }
+        }
+        private async Task WriteSignalToEAFileAsync(ProcessedSignal signal)
         {
             if (string.IsNullOrEmpty(eaSettings.MT4FilesPath))
             {
@@ -160,81 +200,133 @@ namespace TelegramEAManager
             }
 
             var filePath = Path.Combine(eaSettings.MT4FilesPath, "telegram_signals.txt");
-
-            // Ensure directory exists
             var directory = Path.GetDirectoryName(filePath);
             if (!string.IsNullOrEmpty(directory))
             {
                 Directory.CreateDirectory(directory);
             }
 
-            // Generate unique signal identifier
-            var signalIdentifier = $"{signal.ChannelId}_{signal.ParsedData?.Symbol}_{signal.ParsedData?.Direction}_{actualTimestamp:yyyyMMddHHmmss}";
-
-            // Check if we already wrote this signal
-            if (writtenSignalIds.Contains(signalIdentifier))
-            {
-                Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Signal already written, skipping duplicate: {signalIdentifier}");
-                return;
-            }
-
             var signalText = FormatSignalForEA(signal);
 
-            // Write with retry mechanism
-            var maxRetries = 3;
-            var retryCount = 0;
-
-            while (retryCount < maxRetries)
+            // Use semaphore to prevent concurrent file access
+            await fileWriteSemaphore.WaitAsync();
+            try
             {
+                // Check for duplicate in file before writing
+                var existingLines = File.Exists(filePath) ? await File.ReadAllLinesAsync(filePath) : Array.Empty<string>();
+
+                // Create a signature for this signal
+                var signalSignature = $"|{signal.ChannelId}|{signal.ChannelName}|{signal.ParsedData?.Direction ?? ""}|{signal.ParsedData?.Symbol ?? ""}|";
+
+                // Check if a similar signal was written in the last minute
+                var recentDuplicate = existingLines
+                    .Where(line => !line.StartsWith("#") && line.Contains(signalSignature))
+                    .Select(line => line.Split('|'))
+                    .Where(parts => parts.Length > 0)
+                    .Select(parts => DateTime.TryParse(parts[0], out var dt) ? dt : DateTime.MinValue)
+                    .Any(signalTime => (DateTime.Now - signalTime).TotalSeconds < 60);
+
+                if (!recentDuplicate)
+                {
+                    await File.AppendAllTextAsync(filePath, signalText + Environment.NewLine);
+                }
+                else
+                {
+                    Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Skipped duplicate signal in file");
+                }
+            }
+            finally
+            {
+                fileWriteSemaphore.Release();
+            }
+        }
+        private async Task SaveSignalsHistoryAsync()
+        {
+            try
+            {
+                List<ProcessedSignal> signalsToSave;
+                lock (processedSignals)
+                {
+                    signalsToSave = processedSignals.ToList();
+                }
+
+                var json = JsonConvert.SerializeObject(signalsToSave, Formatting.Indented);
+                await File.WriteAllTextAsync(signalsHistoryFile, json);
+            }
+            catch (Exception ex)
+            {
+                OnErrorOccurred($"Failed to save signals history: {ex.Message}");
+            }
+        }
+        public async Task CleanupProcessedSignalsAsync()
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(eaSettings.MT4FilesPath))
+                    return;
+
+                var filePath = Path.Combine(eaSettings.MT4FilesPath, "telegram_signals.txt");
+
+                if (!File.Exists(filePath))
+                    return;
+
+                await fileWriteSemaphore.WaitAsync();
                 try
                 {
-                    lock (fileLock)
+                    var lines = await File.ReadAllLinesAsync(filePath);
+                    var newLines = new List<string>();
+                    var now = DateTime.Now;
+
+                    foreach (var line in lines)
                     {
-                        using (var fs = new FileStream(
-                            filePath,
-                            FileMode.Append,
-                            FileAccess.Write,
-                            FileShare.Read,
-                            4096,
-                            FileOptions.WriteThrough))
-                        using (var writer = new StreamWriter(fs, System.Text.Encoding.UTF8) { AutoFlush = true })
+                        if (line.StartsWith("#") || string.IsNullOrWhiteSpace(line))
                         {
-                            writer.WriteLine(signalText);
+                            newLines.Add(line);
+                            continue;
                         }
 
-                        // Mark as written
-                        writtenSignalIds.Add(signalIdentifier);
-
-                        // Clean up old entries if too many
-                        if (writtenSignalIds.Count > 1000)
+                        var parts = line.Split('|');
+                        if (parts.Length >= 11)
                         {
-                            writtenSignalIds.Clear();
+                            if (DateTime.TryParse(parts[0], out DateTime signalTime))
+                            {
+                                var ageMinutes = (now - signalTime).TotalMinutes;
+
+                                // Keep signals less than MaxSignalAge OR marked as PROCESSED
+                                if (ageMinutes <= 10 || parts[10] == "PROCESSED")
+                                {
+                                    // Don't keep processed signals older than 30 minutes
+                                    if (!(parts[10] == "PROCESSED" && ageMinutes > 30))
+                                    {
+                                        newLines.Add(line);
+                                    }
+                                }
+                            }
                         }
                     }
 
-                    // Success - break the retry loop
-                    break;
+                    await File.WriteAllLinesAsync(filePath, newLines);
                 }
-                catch (IOException ex) when (retryCount < maxRetries - 1)
+                finally
                 {
-                    retryCount++;
-                    Thread.Sleep(100 * retryCount);
-                    OnErrorOccurred($"File write retry {retryCount}/{maxRetries}: {ex.Message}");
-                }
-                catch (Exception ex)
-                {
-                    throw new InvalidOperationException($"Failed to write signal to EA file: {ex.Message}");
+                    fileWriteSemaphore.Release();
                 }
             }
+            catch (Exception ex)
+            {
+                OnErrorOccurred($"Failed to cleanup signals: {ex.Message}");
+            }
         }
+
+
+      
         private string FormatSignalForEA(ProcessedSignal signal)
         {
-            // IMPORTANT: Always use UTC for consistency
-            // The signal.DateTime should already be in UTC from Telegram
-            var signalTimeUtc = DateTime.Now;
+            // Always use UTC time for consistency
+            var utcTime = DateTime.Now;
 
             // Format: TIMESTAMP|CHANNEL_ID|CHANNEL_NAME|DIRECTION|SYMBOL|ENTRY|SL|TP1|TP2|TP3|STATUS
-            var formatted = $"{signalTimeUtc:yyyy.MM.dd HH:mm:ss}|" +  // Always write UTC time
+            var formatted = $"{utcTime:yyyy.MM.dd HH:mm:ss}|" +
                             $"{signal.ChannelId}|" +
                             $"{signal.ChannelName}|" +
                             $"{signal.ParsedData?.Direction ?? "BUY"}|" +
@@ -246,16 +338,11 @@ namespace TelegramEAManager
                             $"{(signal.ParsedData?.TakeProfit3 ?? 0):F5}|" +
                             $"NEW";
 
-            // Debug log with both UTC and local time
-            var localTime = signalTimeUtc.ToLocalTime();
-            Console.WriteLine($"[{DateTime.UtcNow:HH:mm:ss} UTC] Writing signal:");
-            Console.WriteLine($"  Signal UTC time: {signalTimeUtc:yyyy-MM-dd HH:mm:ss}");
-            Console.WriteLine($"  Signal local time: {localTime:yyyy-MM-dd HH:mm:ss}");
-            Console.WriteLine($"  Symbol: {signal.ParsedData?.Symbol} {signal.ParsedData?.Direction}");
+            // Debug log with UTC time
+            Console.WriteLine($"[{utcTime:HH:mm:ss} UTC] Writing signal: {signal.ParsedData?.Symbol} {signal.ParsedData?.Direction}");
 
             return formatted;
         }
-
 
         /// <summary>
         /// Parse trading signal from message text using regex patterns
@@ -400,7 +487,6 @@ namespace TelegramEAManager
         {
             return symbol.Replace("/", "").Replace("-", "").ToUpper().Trim();
         }
-
         /// <summary>
         /// Apply symbol mapping with proper error handling
         /// </summary>
@@ -453,7 +539,6 @@ namespace TelegramEAManager
                 throw new InvalidOperationException($"Symbol mapping failed: {ex.Message}");
             }
         }
-
         /// <summary>
         /// Validate signal data
         private bool ValidateSignal(ParsedSignalData? parsedData)
@@ -569,61 +654,7 @@ namespace TelegramEAManager
 
         public void CleanupProcessedSignals()
         {
-            try
-            {
-                if (string.IsNullOrEmpty(eaSettings.MT4FilesPath))
-                    return;
-
-                var filePath = Path.Combine(eaSettings.MT4FilesPath, "telegram_signals.txt");
-
-                if (!File.Exists(filePath))
-                    return;
-
-                lock (fileLock)
-                {
-                    var lines = File.ReadAllLines(filePath).ToList();
-                    var newLines = new List<string>();
-                    var now = DateTime.UtcNow;
-
-                    foreach (var line in lines)
-                    {
-                        if (line.StartsWith("#") || string.IsNullOrWhiteSpace(line))
-                        {
-                            newLines.Add(line);
-                            continue;
-                        }
-
-                        var parts = line.Split('|');
-                        if (parts.Length >= 11)
-                        {
-                            // Parse timestamp
-                            if (DateTime.TryParse(parts[0], out DateTime signalTime))
-                            {
-                                var ageMinutes = (now - signalTime).TotalMinutes;
-
-                                // Keep only recent signals (less than MaxSignalAge)
-                                if (ageMinutes <= 10)
-                                {
-                                    newLines.Add(line);
-                                }
-                                else
-                                {
-                                    Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Removing old signal: {parts[4]} {parts[3]} - Age: {ageMinutes:F1} minutes");
-                                }
-                            }
-                        }
-                    }
-
-                    // Write back cleaned file
-                    File.WriteAllLines(filePath, newLines);
-
-                    Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Cleanup complete - Kept {newLines.Count(l => !l.StartsWith("#") && !string.IsNullOrWhiteSpace(l))} signals");
-                }
-            }
-            catch (Exception ex)
-            {
-                OnErrorOccurred($"Failed to cleanup signals: {ex.Message}");
-            }
+            Task.Run(async () => await CleanupProcessedSignalsAsync()).Wait();
         }
 
         /// <summary>
@@ -779,7 +810,10 @@ namespace TelegramEAManager
 
         public List<ProcessedSignal> GetSignalsHistory()
         {
-            return processedSignals.ToList();
+            lock (processedSignals)
+            {
+                return processedSignals.ToList();
+            }
         }
 
 

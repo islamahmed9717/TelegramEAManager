@@ -672,15 +672,31 @@ STEP 7: 📋 Copy the api_id (numbers) and api_hash (long string) below"
             {
                 OnDebugMessage($"Polling {monitoredChannels.Count} channels...");
 
-                foreach (var channelId in monitoredChannels.ToList())
+                // Use parallel processing with limited concurrency
+                var semaphore = new SemaphoreSlim(3, 3); // Process max 3 channels at once
+                var tasks = monitoredChannels.Select(async channelId =>
                 {
+                    await semaphore.WaitAsync();
                     try
                     {
                         await PollChannelForNewMessages(channelId);
                     }
-                    catch (Exception ex)
+                    finally
                     {
-                        OnDebugMessage($"Error polling channel {channelId}: {ex.Message}");
+                        semaphore.Release();
+                    }
+                });
+
+                // Wait for all with timeout
+                using (var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30))) // 30 second total timeout
+                {
+                    try
+                    {
+                        await Task.WhenAll(tasks).WaitAsync(cts.Token);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        OnDebugMessage("Polling cycle timeout - some channels may not have been checked");
                     }
                 }
             }
@@ -705,132 +721,141 @@ STEP 7: 📋 Copy the api_id (numbers) and api_hash (long string) below"
 
                 OnDebugMessage($"Polling channel ID: {channelId}");
 
-                // Get channel access hash
-                var dialogs = await client.Messages_GetAllDialogs();
-
-                // Try to find as Channel
-                var channel = dialogs.chats.Values.OfType<Channel>().FirstOrDefault(c => c.ID == channelId);
-
-                if (channel != null)
+                // Use cancellation token to prevent hanging
+                using (var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10))) // 10 second timeout
                 {
-                    OnDebugMessage($"Found channel: {channel.Title}");
-
-                    var inputChannel = new InputChannel(channelId, channel.access_hash);
-                    var history = await client.Messages_GetHistory(inputChannel, limit: 20);
-
-                    var lastKnownId = lastMessageIds.GetValueOrDefault(channelId, 0);
-                    OnDebugMessage($"Last known message ID for {channel.Title}: {lastKnownId}");
-
-                    // CRITICAL FIX: Get the maximum age for signals from EA settings
-                    int maxSignalAgeMinutes = 10; // Default to 10 minutes (matching your EA setting)
-
-                    var newMessages = 0;
-                    foreach (var message in history.Messages.OfType<TL.Message>().OrderBy(m => m.ID))
+                    try
                     {
-                        if (message.ID > lastKnownId && !string.IsNullOrEmpty(message.message))
-                        {
-                            // CRITICAL: Check message age before processing
-                            var messageAge = DateTime.UtcNow - message.Date;
+                        // Get channel access hash with timeout
+                        var dialogs = await client.Messages_GetAllDialogs().WaitAsync(cts.Token);
 
-                            if (messageAge.TotalMinutes <= maxSignalAgeMinutes)
-                            {
-                                newMessages++;
-                                OnDebugMessage($"New message in {channel.Title}: ID={message.ID}, Age={messageAge.TotalMinutes:F1} minutes");
+                        // Try to find as Channel
+                        var channel = dialogs.chats.Values.OfType<Channel>().FirstOrDefault(c => c.ID == channelId);
 
-                                // Pass the ACTUAL message timestamp
-                                OnNewMessageReceived(message.message, channelId, channel.Title ?? $"Channel_{channelId}", message.Date);
-                            }
-                            else
-                            {
-                                OnDebugMessage($"Skipping old message: ID={message.ID}, Age={messageAge.TotalMinutes:F1} minutes (max: {maxSignalAgeMinutes})");
-                            }
+                        if (channel != null)
+                        {
+                            OnDebugMessage($"Found channel: {channel.Title}");
 
-                            // Update lastKnownId even for old messages to prevent reprocessing
-                            lastMessageIds[channelId] = message.ID;
-                        }
-                    }
+                            var inputChannel = new InputChannel(channelId, channel.access_hash);
 
-                    if (newMessages == 0)
-                    {
-                        OnDebugMessage($"No new messages in {channel.Title}");
-                    }
-                }
-                else
-                {
-                    // Try as regular chat or user
-                    var chat = dialogs.chats.Values.FirstOrDefault(c => c.ID == channelId);
-                    if (chat != null)
-                    {
-                        // Get display name based on chat type
-                        string chatName = "";
-                        if (chat is Chat regularChatObj)
-                        {
-                            chatName = regularChatObj.Title;
-                            OnDebugMessage($"Found chat: {chatName}");
-                        }
-                        else if (chat is Channel channelObj)
-                        {
-                            chatName = channelObj.Title;
-                            OnDebugMessage($"Found channel (as chat): {chatName}");
-                        }
+                            // Get history with timeout
+                            var history = await client.Messages_GetHistory(inputChannel, limit: 10).WaitAsync(cts.Token);
 
-                        // Check if it's a user instead
-                        var user = dialogs.users.Values.FirstOrDefault(u => u.ID == channelId);
-                        if (user != null)
-                        {
-                            chatName = $"{user.first_name} {user.last_name}".Trim();
-                            OnDebugMessage($"Found user: {chatName}");
-                        }
-
-                        // Create input peer based on actual type
-                        InputPeer? inputPeer = null;
-
-                        if (chat is Channel channelObj2)
-                        {
-                            inputPeer = new InputPeerChannel(channelObj2.ID, channelObj2.access_hash);
-                        }
-                        else if (chat is Chat regularChatObj2)
-                        {
-                            inputPeer = new InputPeerChat(regularChatObj2.ID);
-                        }
-                        else if (user != null)
-                        {
-                            inputPeer = new InputPeerUser(user.ID, user.access_hash);
-                        }
-
-                        if (inputPeer != null)
-                        {
-                            var history = await client.Messages_GetHistory(inputPeer, limit: 20);
                             var lastKnownId = lastMessageIds.GetValueOrDefault(channelId, 0);
+                            OnDebugMessage($"Last known message ID for {channel.Title}: {lastKnownId}");
 
-                            // Maximum age for signals
-                            int maxSignalAgeMinutes = 10;
+                            var newMessages = 0;
+                            var messages = history.Messages.OfType<TL.Message>()
+                                .OrderBy(m => m.ID)
+                                .ToList(); // Convert to list to avoid multiple enumerations
 
-                            foreach (var message in history.Messages.OfType<TL.Message>().OrderBy(m => m.ID))
+                            foreach (var message in messages)
                             {
                                 if (message.ID > lastKnownId && !string.IsNullOrEmpty(message.message))
                                 {
-                                    // Check message age
-                                    var messageAge = DateTime.UtcNow - message.Date;
+                                    newMessages++;
+                                    OnDebugMessage($"New message in {channel.Title}: ID={message.ID}, Length={message.message.Length}");
 
-                                    if (messageAge.TotalMinutes <= maxSignalAgeMinutes)
+                                    // Process in background to avoid blocking
+                                    var msgCopy = message.message;
+                                    var msgId = message.ID;
+                                    _ = Task.Run(() =>
                                     {
-                                        OnDebugMessage($"New message: {message.message.Substring(0, Math.Min(50, message.message.Length))}...");
-                                        OnNewMessageReceived(message.message, channelId, chatName, message.Date);
-                                    }
-                                    else
-                                    {
-                                        OnDebugMessage($"Skipping old message from {chatName}: Age={messageAge.TotalMinutes:F1} minutes");
-                                    }
+                                        try
+                                        {
+                                            OnNewMessageReceived(msgCopy, channelId, channel.Title ?? $"Channel_{channelId}");
+                                        }
+                                        catch (Exception ex)
+                                        {
+                                            OnDebugMessage($"Error processing message: {ex.Message}");
+                                        }
+                                    });
 
-                                    lastMessageIds[channelId] = message.ID;
+                                    lastMessageIds[channelId] = msgId;
                                 }
+                            }
+
+                            if (newMessages == 0)
+                            {
+                                OnDebugMessage($"No new messages in {channel.Title}");
+                            }
+                        }
+                        else
+                        {
+                            // Try as regular chat or user
+                            var chat = dialogs.chats.Values.FirstOrDefault(c => c.ID == channelId);
+                            if (chat != null)
+                            {
+                                string chatName = "";
+                                InputPeer? inputPeer = null;
+
+                                if (chat is Chat regularChatObj)
+                                {
+                                    chatName = regularChatObj.Title;
+                                    inputPeer = new InputPeerChat(regularChatObj.ID);
+                                    OnDebugMessage($"Found chat: {chatName}");
+                                }
+                                else if (chat is Channel channelObj)
+                                {
+                                    chatName = channelObj.Title;
+                                    inputPeer = new InputPeerChannel(channelObj.ID, channelObj.access_hash);
+                                    OnDebugMessage($"Found channel (as chat): {chatName}");
+                                }
+
+                                // Check if it's a user instead
+                                var user = dialogs.users.Values.FirstOrDefault(u => u.ID == channelId);
+                                if (user != null)
+                                {
+                                    chatName = $"{user.first_name} {user.last_name}".Trim();
+                                    inputPeer = new InputPeerUser(user.ID, user.access_hash);
+                                    OnDebugMessage($"Found user: {chatName}");
+                                }
+
+                                if (inputPeer != null)
+                                {
+                                    var history = await client.Messages_GetHistory(inputPeer, limit: 10).WaitAsync(cts.Token);
+                                    var lastKnownId = lastMessageIds.GetValueOrDefault(channelId, 0);
+
+                                    var messages = history.Messages.OfType<TL.Message>()
+                                        .OrderBy(m => m.ID)
+                                        .ToList();
+
+                                    foreach (var message in messages)
+                                    {
+                                        if (message.ID > lastKnownId && !string.IsNullOrEmpty(message.message))
+                                        {
+                                            var msgCopy = message.message;
+                                            var msgId = message.ID;
+
+                                            OnDebugMessage($"New message: {msgCopy.Substring(0, Math.Min(50, msgCopy.Length))}...");
+
+                                            // Process in background
+                                            _ = Task.Run(() =>
+                                            {
+                                                try
+                                                {
+                                                    OnNewMessageReceived(msgCopy, channelId, chatName);
+                                                }
+                                                catch (Exception ex)
+                                                {
+                                                    OnDebugMessage($"Error processing message: {ex.Message}");
+                                                }
+                                            });
+
+                                            lastMessageIds[channelId] = msgId;
+                                        }
+                                    }
+                                }
+                            }
+                            else
+                            {
+                                OnDebugMessage($"Channel/Chat {channelId} not found in dialogs");
                             }
                         }
                     }
-                    else
+                    catch (OperationCanceledException)
                     {
-                        OnDebugMessage($"Channel/Chat {channelId} not found in dialogs");
+                        OnDebugMessage($"Polling timeout for channel {channelId}");
                     }
                 }
             }

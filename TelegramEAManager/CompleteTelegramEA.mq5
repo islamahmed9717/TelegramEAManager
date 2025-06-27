@@ -23,6 +23,25 @@ enum ENUM_RISK_MODE
    RISK_MONEY_AMOUNT,     // Money Amount
    RISK_PERCENT_BALANCE   // Percent of Balance
 };
+//--- BROKER ENUMS
+enum ENUM_BROKER_TYPE
+{
+   BROKER_AUTO_DETECT,    // 🤖 Auto-Detect My Broker
+   BROKER_EXNESS,         // 🔴 Exness
+   BROKER_EQUITI,         // 🟢 Equiti  
+   BROKER_ONE_ROYAL,      // 🔵 One Royal
+   BROKER_IC_MARKETS,     // 🟠 IC Markets
+   BROKER_MANUAL          // ⚙️ Manual Configuration
+};
+
+enum ENUM_EXNESS_ACCOUNT
+{
+   EXNESS_AUTO_DETECT,    // 🤖 Auto-Detect Account Type
+   EXNESS_STANDARD,       // Standard Account (no suffix)
+   EXNESS_PRO,            // Pro Account (.a suffix)
+   EXNESS_ZERO,           // Zero Account (.z suffix)
+   EXNESS_RAW             // Raw Account (.r suffix)
+};
 
 //--- Input Parameters
 input group "==== TELEGRAM CHANNEL SETTINGS ===="
@@ -42,6 +61,10 @@ input string SymbolsToTrade = ""; // Only trade these symbols (whitelist)
 string processedSignalIdsFile = "processed_signal_ids.dat";
 int maxProcessedSignals = 10000; // Limit to prevent memory issues
 
+input group "==== BROKER AUTO-CONFIGURATION ===="
+input ENUM_BROKER_TYPE BrokerSelection = BROKER_AUTO_DETECT; // Select Your Broker
+input ENUM_EXNESS_ACCOUNT ExnessAccountType = EXNESS_AUTO_DETECT; // Exness Account Type (if using Exness)
+input bool UseManualMapping = false; // Override with Manual Mapping
 
 input group "==== RISK MANAGEMENT ===="
 input ENUM_RISK_MODE RiskMode = RISK_FIXED_LOT; // Risk calculation mode
@@ -166,6 +189,12 @@ struct TelegramSignal
 //+------------------------------------------------------------------+
 int OnInit()
 {
+// Initialize broker-specific symbol mapping
+Print("═══════════════════════════════════════════");
+Print("🏦 INITIALIZING BROKER MAPPING");
+Print("═══════════════════════════════════════════");
+InitializeSymbolMappings();
+      
     Print("=================================================================");
     Print("🚀 TELEGRAM EA MANAGER - FIXED VERSION");
     Print("=================================================================");
@@ -430,64 +459,461 @@ void OnTimer()
 //+------------------------------------------------------------------+
 //| Initialize symbol mappings from input                           |
 //+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
+//| Initialize symbol mappings from input                           |
+//+------------------------------------------------------------------+
 void InitializeSymbolMappings()
 {
-   symbolMappingCount = 0;
-   
-   if(StringLen(SymbolsMapping) == 0)
-   {
-      if(PrintToExpertLog)
-         Print("📋 No symbol mappings configured - using original symbols");
-      return;
-   }
-   
-   string mappings[];
-   int mappingCount = StringSplit(SymbolsMapping, ',', mappings);
-   
-   if(mappingCount <= 0)
-   {
-      Print("⚠️ Invalid symbol mapping format");
-      return;
-   }
-   
-   if(ArrayResize(symbolMappings, mappingCount) < 0)
-   {
-      Print("❌ Failed to resize symbolMappings array");
-      return;
-   }
-   
-   for(int i = 0; i < mappingCount; i++)
-   {
-      string mapping = mappings[i];
-      StringTrimLeft(mapping);
-      StringTrimRight(mapping);
-      
-      string parts[];
-      
-      if(StringSplit(mapping, ':', parts) == 2)
-      {
-         symbolMappings[symbolMappingCount][0] = parts[0]; // From
-         symbolMappings[symbolMappingCount][1] = parts[1]; // To
-         
-         StringTrimLeft(symbolMappings[symbolMappingCount][0]);
-         StringTrimRight(symbolMappings[symbolMappingCount][0]);
-         StringTrimLeft(symbolMappings[symbolMappingCount][1]);
-         StringTrimRight(symbolMappings[symbolMappingCount][1]);
-         
-         if(PrintToExpertLog)
-            Print("🗺️ MT5 Symbol Mapping [", symbolMappingCount, "]: ", 
-                  symbolMappings[symbolMappingCount][0], " → ", symbolMappings[symbolMappingCount][1]);
-         
-         symbolMappingCount++;
-      }
-      else
-      {
-         Print("⚠️ Invalid mapping format: ", mapping, " (expected: FROM:TO)");
-      }
-   }
-   
-   Print("✅ MT5 Initialized ", symbolMappingCount, " symbol mappings");
+    symbolMappingCount = 0;
+    
+    // First, try auto broker detection
+    if(BrokerSelection == BROKER_AUTO_DETECT)
+    {
+        AutoSetupBrokerMapping();
+    }
+    else
+    {
+        // Use user-selected broker
+        SetupSelectedBrokerMapping();
+    }
+    
+    // Then apply any manual overrides
+    if(UseManualMapping && StringLen(SymbolsMapping) > 0)
+    {
+        ApplyManualMappingOverrides();
+    }
+    
+    // Show final mapping summary
+    ShowMappingSummary();
 }
+
+
+//+------------------------------------------------------------------+
+//| Auto-detect and setup broker mapping                           |
+//+------------------------------------------------------------------+
+void AutoSetupBrokerMapping()
+{
+    Print("🤖 AUTO-DETECTING BROKER...");
+    Print("═══════════════════════════════════════════");
+    
+    string brokerName = AccountInfoString(ACCOUNT_COMPANY);
+    string brokerServer = AccountInfoString(ACCOUNT_SERVER);
+    
+    Print("📊 Account Company: ", brokerName);
+    Print("📊 Server Name: ", brokerServer);
+    
+    // Convert to lowercase for comparison
+    string brokerLower = brokerName;
+    StringToLower(brokerLower);
+    
+    // Detect broker
+    if(StringFind(brokerLower, "exness") >= 0)
+    {
+        Print("✅ Detected: EXNESS");
+        SetupExnessMapping();
+    }
+    else if(StringFind(brokerLower, "equiti") >= 0)
+    {
+        Print("✅ Detected: EQUITI");
+        SetupEquitiMapping();
+    }
+    else if(StringFind(brokerLower, "one royal") >= 0 || StringFind(brokerLower, "oneroyal") >= 0)
+    {
+        Print("✅ Detected: ONE ROYAL");
+        SetupOneRoyalMapping();
+    }
+    else if(StringFind(brokerLower, "ic markets") >= 0 || StringFind(brokerLower, "icmarkets") >= 0)
+    {
+        Print("✅ Detected: IC MARKETS");
+        SetupICMarketsMapping();
+    }
+    else
+    {
+        Print("⚠️ Unknown broker: ", brokerName);
+        Print("💡 Using default mapping. Select your broker manually for better results.");
+        SetupDefaultMapping();
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Setup user-selected broker mapping                             |
+//+------------------------------------------------------------------+
+void SetupSelectedBrokerMapping()
+{
+    switch(BrokerSelection)
+    {
+        case BROKER_EXNESS:
+            SetupExnessMapping();
+            break;
+        case BROKER_EQUITI:
+            SetupEquitiMapping();
+            break;
+        case BROKER_ONE_ROYAL:
+            SetupOneRoyalMapping();
+            break;
+        case BROKER_IC_MARKETS:
+            SetupICMarketsMapping();
+            break;
+        case BROKER_MANUAL:
+            Print("📝 Using manual mapping only");
+            break;
+    }
+}
+
+//+------------------------------------------------------------------+
+//| EXNESS BROKER MAPPING                                          |
+//+------------------------------------------------------------------+
+void SetupExnessMapping()
+{
+    Print("🏦 Setting up EXNESS symbol mapping...");
+    
+    // Detect account type
+    string suffix = "";
+    
+    if(ExnessAccountType == EXNESS_AUTO_DETECT)
+    {
+        // Try to detect by checking symbol availability
+        if(SymbolSelect("EURUSD.a", false)) suffix = ".a";
+        else if(SymbolSelect("EURUSD.z", false)) suffix = ".z";
+        else if(SymbolSelect("EURUSD.r", false)) suffix = ".r";
+        else suffix = ""; // Standard account
+        
+        Print("🔍 Auto-detected account suffix: ", suffix == "" ? "Standard (no suffix)" : suffix);
+    }
+    else
+    {
+        switch(ExnessAccountType)
+        {
+            case EXNESS_STANDARD: suffix = ""; break;
+            case EXNESS_PRO: suffix = ".a"; break;
+            case EXNESS_ZERO: suffix = ".z"; break;
+            case EXNESS_RAW: suffix = ".r"; break;
+        }
+    }
+    
+    // FOREX PAIRS
+    AddMapping("EURUSD", "EURUSD" + suffix);
+    AddMapping("GBPUSD", "GBPUSD" + suffix);
+    AddMapping("USDJPY", "USDJPY" + suffix);
+    AddMapping("USDCHF", "USDCHF" + suffix);
+    AddMapping("AUDUSD", "AUDUSD" + suffix);
+    AddMapping("USDCAD", "USDCAD" + suffix);
+    AddMapping("NZDUSD", "NZDUSD" + suffix);
+    AddMapping("EURGBP", "EURGBP" + suffix);
+    AddMapping("EURJPY", "EURJPY" + suffix);
+    AddMapping("GBPJPY", "GBPJPY" + suffix);
+    AddMapping("GBPCHF", "GBPCHF" + suffix);
+    AddMapping("EURCHF", "EURCHF" + suffix);
+    AddMapping("AUDCHF", "AUDCHF" + suffix);
+    AddMapping("AUDJPY", "AUDJPY" + suffix);
+    AddMapping("AUDNZD", "AUDNZD" + suffix);
+    AddMapping("NZDCHF", "NZDCHF" + suffix);
+    AddMapping("NZDJPY", "NZDJPY" + suffix);
+    AddMapping("CHFJPY", "CHFJPY" + suffix);
+    AddMapping("CADCHF", "CADCHF" + suffix);
+    AddMapping("CADJPY", "CADJPY" + suffix);
+    AddMapping("EURAUD", "EURAUD" + suffix);
+    AddMapping("EURCAD", "EURCAD" + suffix);
+    AddMapping("EURNZD", "EURNZD" + suffix);
+    AddMapping("GBPAUD", "GBPAUD" + suffix);
+    AddMapping("GBPCAD", "GBPCAD" + suffix);
+    AddMapping("GBPNZD", "GBPNZD" + suffix);
+    
+    // METALS
+    AddMapping("GOLD", "XAUUSD" + suffix);
+    AddMapping("XAUUSD", "XAUUSD" + suffix);
+    AddMapping("SILVER", "XAGUSD" + suffix);
+    AddMapping("XAGUSD", "XAGUSD" + suffix);
+    
+    // INDICES
+    AddMapping("US30", "US30Cash");
+    AddMapping("DOW", "US30Cash");
+    AddMapping("NAS100", "NAS100Cash");
+    AddMapping("NASDAQ", "NAS100Cash");
+    AddMapping("SPX500", "SPX500Cash");
+    AddMapping("SP500", "SPX500Cash");
+    AddMapping("UK100", "UK100Cash");
+    AddMapping("FTSE", "UK100Cash");
+    AddMapping("GER30", "GER30Cash");
+    AddMapping("GER40", "GER40Cash");
+    AddMapping("DAX", "GER40Cash");
+    AddMapping("FRA40", "FRA40Cash");
+    AddMapping("JPN225", "JPN225Cash");
+    AddMapping("NIKKEI", "JPN225Cash");
+    AddMapping("AUS200", "AUS200Cash");
+    
+    // COMMODITIES
+    AddMapping("OIL", "USOILCash");
+    AddMapping("CRUDE", "USOILCash");
+    AddMapping("WTI", "USOILCash");
+    AddMapping("BRENT", "UKOILCash");
+    AddMapping("UKOIL", "UKOILCash");
+    AddMapping("NATGAS", "NATGASCash");
+    
+    // CRYPTO
+    AddMapping("BITCOIN", "BTCUSD");
+    AddMapping("BTC", "BTCUSD");
+    AddMapping("ETHEREUM", "ETHUSD");
+    AddMapping("ETH", "ETHUSD");
+    
+    Print("✅ EXNESS mapping configured with ", symbolMappingCount, " symbols");
+}
+
+//+------------------------------------------------------------------+
+//| EQUITI BROKER MAPPING                                          |
+//+------------------------------------------------------------------+
+void SetupEquitiMapping()
+{
+    Print("🏦 Setting up EQUITI symbol mapping...");
+    
+    // Check for suffix
+    string suffix = "";
+    if(SymbolSelect("EURUSD.m", false)) suffix = ".m";
+    
+    // FOREX PAIRS
+    AddMapping("EURUSD", "EURUSD" + suffix);
+    AddMapping("GBPUSD", "GBPUSD" + suffix);
+    AddMapping("USDJPY", "USDJPY" + suffix);
+    AddMapping("USDCHF", "USDCHF" + suffix);
+    AddMapping("AUDUSD", "AUDUSD" + suffix);
+    AddMapping("USDCAD", "USDCAD" + suffix);
+    AddMapping("NZDUSD", "NZDUSD" + suffix);
+    AddMapping("EURGBP", "EURGBP" + suffix);
+    AddMapping("EURJPY", "EURJPY" + suffix);
+    AddMapping("GBPJPY", "GBPJPY" + suffix);
+    
+    // METALS
+    AddMapping("GOLD", "XAUUSD" + suffix);
+    AddMapping("XAUUSD", "XAUUSD" + suffix);
+    AddMapping("SILVER", "XAGUSD" + suffix);
+    
+    // INDICES (Equiti specific)
+    AddMapping("US30", "US30");
+    AddMapping("DOW", "US30");
+    AddMapping("NAS100", "USTEC");
+    AddMapping("NASDAQ", "USTEC");
+    AddMapping("SPX500", "US500");
+    AddMapping("SP500", "US500");
+    AddMapping("UK100", "UK100");
+    AddMapping("GER30", "GER30");
+    AddMapping("GER40", "GER40");
+    AddMapping("DAX", "GER40");
+    
+    // COMMODITIES
+    AddMapping("OIL", "USOIL");
+    AddMapping("CRUDE", "USOIL");
+    AddMapping("BRENT", "UKOIL");
+    
+    Print("✅ EQUITI mapping configured with ", symbolMappingCount, " symbols");
+}
+
+//+------------------------------------------------------------------+
+//| ONE ROYAL BROKER MAPPING                                        |
+//+------------------------------------------------------------------+
+void SetupOneRoyalMapping()
+{
+    Print("🏦 Setting up ONE ROYAL symbol mapping...");
+    
+    // FOREX - One Royal typically uses standard names
+    AddMapping("EURUSD", "EURUSD");
+    AddMapping("GBPUSD", "GBPUSD");
+    AddMapping("USDJPY", "USDJPY");
+    AddMapping("USDCHF", "USDCHF");
+    AddMapping("AUDUSD", "AUDUSD");
+    AddMapping("USDCAD", "USDCAD");
+    AddMapping("NZDUSD", "NZDUSD");
+    
+    // METALS
+    AddMapping("GOLD", "XAUUSD");
+    AddMapping("XAUUSD", "XAUUSD");
+    AddMapping("SILVER", "XAGUSD");
+    
+    // INDICES
+    AddMapping("US30", "US30");
+    AddMapping("DOW", "US30");
+    AddMapping("NAS100", "NAS100");
+    AddMapping("NASDAQ", "NAS100");
+    AddMapping("SPX500", "SPX500");
+    AddMapping("SP500", "SPX500");
+    
+    // COMMODITIES
+    AddMapping("OIL", "USOIL");
+    AddMapping("CRUDE", "USOIL");
+    AddMapping("BRENT", "UKOIL");
+    
+    Print("✅ ONE ROYAL mapping configured with ", symbolMappingCount, " symbols");
+}
+
+//+------------------------------------------------------------------+
+//| IC MARKETS BROKER MAPPING                                       |
+//+------------------------------------------------------------------+
+void SetupICMarketsMapping()
+{
+    Print("🏦 Setting up IC MARKETS symbol mapping...");
+    
+    // FOREX - IC Markets uses clean symbols
+    AddMapping("EURUSD", "EURUSD");
+    AddMapping("GBPUSD", "GBPUSD");
+    AddMapping("USDJPY", "USDJPY");
+    AddMapping("USDCHF", "USDCHF");
+    AddMapping("AUDUSD", "AUDUSD");
+    AddMapping("USDCAD", "USDCAD");
+    AddMapping("NZDUSD", "NZDUSD");
+    AddMapping("EURGBP", "EURGBP");
+    AddMapping("EURJPY", "EURJPY");
+    AddMapping("GBPJPY", "GBPJPY");
+    
+    // METALS
+    AddMapping("GOLD", "XAUUSD");
+    AddMapping("XAUUSD", "XAUUSD");
+    AddMapping("SILVER", "XAGUSD");
+    
+    // INDICES - IC Markets uses # prefix
+    AddMapping("US30", "#US30");
+    AddMapping("DOW", "#US30");
+    AddMapping("NAS100", "#NAS100");
+    AddMapping("NASDAQ", "#NAS100");
+    AddMapping("SPX500", "#SPX500");
+    AddMapping("SP500", "#SPX500");
+    AddMapping("UK100", "#UK100");
+    AddMapping("FTSE", "#UK100");
+    AddMapping("GER30", "#GER30");
+    AddMapping("GER40", "#GER40");
+    AddMapping("DAX", "#GER40");
+    AddMapping("AUS200", "#AUS200");
+    
+    // COMMODITIES
+    AddMapping("OIL", "#WTI");
+    AddMapping("CRUDE", "#WTI");
+    AddMapping("WTI", "#WTI");
+    AddMapping("BRENT", "#BRENT");
+    
+    // CRYPTO
+    AddMapping("BITCOIN", "#BTCUSD");
+    AddMapping("BTC", "#BTCUSD");
+    AddMapping("ETHEREUM", "#ETHUSD");
+    AddMapping("ETH", "#ETHUSD");
+    
+    Print("✅ IC MARKETS mapping configured with ", symbolMappingCount, " symbols");
+}
+
+//+------------------------------------------------------------------+
+//| DEFAULT BROKER MAPPING                                          |
+//+------------------------------------------------------------------+
+void SetupDefaultMapping()
+{
+    Print("🏦 Setting up DEFAULT symbol mapping...");
+    
+    // Basic mappings that work with most brokers
+    AddMapping("GOLD", "XAUUSD");
+    AddMapping("SILVER", "XAGUSD");
+    AddMapping("US30", "US30");
+    AddMapping("DOW", "US30");
+    AddMapping("NAS100", "NAS100");
+    AddMapping("NASDAQ", "NAS100");
+    AddMapping("OIL", "USOIL");
+    AddMapping("CRUDE", "USOIL");
+    AddMapping("BITCOIN", "BTCUSD");
+    AddMapping("BTC", "BTCUSD");
+    
+    Print("✅ DEFAULT mapping configured with ", symbolMappingCount, " symbols");
+}
+
+//+------------------------------------------------------------------+
+//| Add symbol mapping helper                                       |
+//+------------------------------------------------------------------+
+void AddMapping(string from, string to)
+{
+    if(symbolMappingCount >= ArraySize(symbolMappings))
+    {
+        ArrayResize(symbolMappings, symbolMappingCount + 50);
+    }
+    
+    symbolMappings[symbolMappingCount][0] = from;
+    symbolMappings[symbolMappingCount][1] = to;
+    symbolMappingCount++;
+}
+
+//+------------------------------------------------------------------+
+//| Apply manual mapping overrides                                  |
+//+------------------------------------------------------------------+
+void ApplyManualMappingOverrides()
+{
+    Print("📝 Applying manual mapping overrides...");
+    
+    string mappings[];
+    int mappingCount = StringSplit(SymbolsMapping, ',', mappings);
+    
+    for(int i = 0; i < mappingCount; i++)
+    {
+        string mapping = mappings[i];
+        StringTrimLeft(mapping);
+        StringTrimRight(mapping);
+        
+        string parts[];
+        if(StringSplit(mapping, ':', parts) == 2)
+        {
+            string from = parts[0];
+            string to = parts[1];
+            StringTrimLeft(from);
+            StringTrimRight(from);
+            StringTrimLeft(to);
+            StringTrimRight(to);
+            
+            // Check if mapping already exists and update it
+            bool found = false;
+            for(int j = 0; j < symbolMappingCount; j++)
+            {
+                if(symbolMappings[j][0] == from)
+                {
+                    symbolMappings[j][1] = to;
+                    found = true;
+                    Print("🔄 Updated mapping: ", from, " → ", to);
+                    break;
+                }
+            }
+            
+            // Add new mapping if not found
+            if(!found)
+            {
+                AddMapping(from, to);
+                Print("➕ Added mapping: ", from, " → ", to);
+            }
+        }
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Show mapping summary                                            |
+//+------------------------------------------------------------------+
+void ShowMappingSummary()
+{
+    Print("═══════════════════════════════════════════");
+    Print("📊 SYMBOL MAPPING SUMMARY");
+    Print("═══════════════════════════════════════════");
+    Print("🏦 Broker: ", AccountInfoString(ACCOUNT_COMPANY));
+    Print("📋 Total Mappings: ", symbolMappingCount);
+    
+    // Test some common symbols
+    TestSymbolMapping("GOLD");
+    TestSymbolMapping("EURUSD");
+    TestSymbolMapping("US30");
+    TestSymbolMapping("BITCOIN");
+    
+    Print("═══════════════════════════════════════════");
+}
+
+//+------------------------------------------------------------------+
+//| Test symbol mapping                                             |
+//+------------------------------------------------------------------+
+void TestSymbolMapping(string symbol)
+{
+    string mapped = ApplySymbolMapping(symbol);
+    bool exists = SymbolSelect(mapped, false);
+    
+    Print("• ", symbol, " → ", mapped, " ", exists ? "✅" : "❌");
+}
+
 
 string GenerateSignalHash(string channelId, string symbol, string direction, datetime timestamp)
 {
@@ -624,7 +1050,7 @@ void CheckForNewSignals()
     if(!IsTimeToTrade())
         return;
     
-    // FIXED: Don't check too frequently
+    // Don't check too frequently
     datetime currentTime = TimeCurrent();
     if(currentTime - g_lastFileCheck < 3) // Minimum 3 seconds between checks
         return;
@@ -640,7 +1066,7 @@ void CheckForNewSignals()
         return;
     }
     
-    // FIXED: Read all lines and track progress
+    // Read all lines
     string allLines[];
     int totalLines = 0;
     
@@ -656,10 +1082,14 @@ void CheckForNewSignals()
     }
     FileClose(fileHandle);
     
-    // FIXED: Only process lines we haven't seen before
+    // Count and process signals
     int newSignalsCount = 0;
     int processedSignalsCount = 0;
     int newSignalsFound = 0;
+    
+    // Debug logging
+    if(PrintToExpertLog)
+        Print("🔍 Checking file with ", totalLines, " total lines");
     
     for(int i = 0; i < totalLines; i++)
     {
@@ -671,19 +1101,15 @@ void CheckForNewSignals()
         if(StringLen(line) == 0 || StringFind(line, "#") == 0)
             continue;
             
-        // FIXED: Count signals by status
+        // Count signals by status
         if(StringFind(line, "|NEW") > 0)
         {
             newSignalsCount++;
             
-            // FIXED: Process only if we haven't processed this exact line before
-            if(line != g_lastProcessedLine)
+            // Process ALL NEW signals without line comparison
+            if(ProcessFormattedSignalLineFixed(line))
             {
-                if(ProcessFormattedSignalLineFixed(line))
-                {
-                    newSignalsFound++;
-                    g_lastProcessedLine = line; // Remember this line
-                }
+                newSignalsFound++;
             }
         }
         else if(StringFind(line, "|PROCESSED") > 0)
@@ -692,7 +1118,7 @@ void CheckForNewSignals()
         }
     }
     
-    // FIXED: Better logging
+    // Logging
     if(PrintToExpertLog)
     {
         if(newSignalsFound > 0)
@@ -700,9 +1126,13 @@ void CheckForNewSignals()
             Print("✅ Found and processed ", newSignalsFound, " NEW signals");
             Print("📊 File status: ", newSignalsCount, " NEW, ", processedSignalsCount, " PROCESSED");
         }
-        else if(newSignalsCount == 0 && processedSignalsCount > 0)
+        else if(newSignalsCount > 0)
         {
-            // FIXED: Only print this occasionally to avoid spam
+            Print("🔍 Found ", newSignalsCount, " NEW signals in file but none were processed (likely duplicates)");
+        }
+        else if(processedSignalsCount > 0)
+        {
+            // Only print this occasionally to avoid spam
             static datetime lastNoNewSignalsLog = 0;
             if(currentTime - lastNoNewSignalsLog > 60) // Log once per minute
             {
@@ -725,22 +1155,35 @@ bool ProcessFormattedSignalLineFixed(string line)
         return false;
     }
     
-    // FIXED: Check signal status first
+    // Check signal status first
     string signalStatus = parts[10];
     StringTrimLeft(signalStatus);
     StringTrimRight(signalStatus);
     
-    // FIXED: Only process NEW signals, skip everything else
+    // Only process NEW signals
     if(signalStatus != "NEW")
     {
         return false; // Don't log, just skip
     }
     
-    if(PrintToExpertLog)
-        Print("🆕 Found NEW signal, processing...");
+    // Generate unique signal ID using all important components
+    string uniqueKey = parts[0] + "_" + parts[1] + "_" + parts[4] + "_" + parts[3] + "_" + parts[5] + "_" + parts[6];
+    string signalId = GenerateSignalId(uniqueKey);
     
+    // Check if already processed FIRST before doing anything else
+    if(IsSignalAlreadyProcessedFixed(signalId))
+    {
+        if(PrintToExpertLog)
+            Print("⏭️ Signal already processed (ID: ", signalId, ")");
+        return false; // Don't count as newly processed
+    }
+    
+    if(PrintToExpertLog)
+        Print("🆕 Found NEW unprocessed signal, ID: ", signalId);
+    
+    // Now create and populate the signal
     TelegramSignal signal;
-    signal.signalId = GenerateSignalId(line);
+    signal.signalId = signalId;
     signal.receivedTime = TimeCurrent();
     
     // Parse timestamp
@@ -752,7 +1195,7 @@ bool ProcessFormattedSignalLineFixed(string line)
     if(signal.signalTime == 0)
         signal.signalTime = TimeCurrent();
     
-    // FIXED: Check signal age
+    // Check signal age
     long signalAgeMinutes = (TimeCurrent() - signal.signalTime) / 60;
     
     if(PrintToExpertLog)
@@ -764,15 +1207,8 @@ bool ProcessFormattedSignalLineFixed(string line)
             Print("⏰ Signal expired: ", (int)signalAgeMinutes, " minutes old");
         
         totalExpiredSignals++;
+        AddToProcessedSignals(signal.signalId); // Mark as processed so we don't check again
         MarkSignalAsProcessedInFileFixed(line);
-        return true;
-    }
-    
-    // FIXED: Check if already processed using better method
-    if(IsSignalAlreadyProcessedFixed(signal.signalId))
-    {
-        if(PrintToExpertLog)
-            Print("⏭️ Signal already processed in memory: ", signal.signalId);
         return true;
     }
     
@@ -817,19 +1253,44 @@ bool ProcessFormattedSignalLineFixed(string line)
     {
         if(PrintToExpertLog)
             Print("❌ Signal validation failed");
-        AddToProcessedSignals(signal.signalId);
+        AddToProcessedSignals(signal.signalId); // Still mark as processed to avoid re-checking
         MarkSignalAsProcessedInFileFixed(line);
         return false;
     }
 }
+
 bool IsSignalAlreadyProcessedFixed(string signalId)
 {
-    // FIXED: Use a more efficient method
-    for(int i = MathMax(0, processedSignalCount - 50); i < processedSignalCount; i++)
+    // Check in-memory array
+    for(int i = 0; i < processedSignalCount; i++)
     {
         if(processedSignalIds[i] == signalId)
             return true;
     }
+    
+    // Also check in the persistent file for safety
+    string filename = processedSignalIdsFile;
+    int fileHandle = FileOpen(filename, FILE_READ|FILE_TXT|FILE_ANSI);
+    if(fileHandle != INVALID_HANDLE)
+    {
+        while(!FileIsEnding(fileHandle))
+        {
+            string line = FileReadString(fileHandle);
+            if(StringFind(line, signalId) >= 0)
+            {
+                FileClose(fileHandle);
+                // Add to memory array for faster future checks
+                if(processedSignalCount < ArraySize(processedSignalIds))
+                {
+                    processedSignalIds[processedSignalCount] = signalId;
+                    processedSignalCount++;
+                }
+                return true;
+            }
+        }
+        FileClose(fileHandle);
+    }
+    
     return false;
 }
 void MarkSignalAsProcessedInFileFixed(string originalLine)
@@ -1211,35 +1672,27 @@ void ProcessTextBasedSignal(string signalText)
 //+------------------------------------------------------------------+
 //| Generate unique signal ID from content                          |
 //+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
+//| Generate unique signal ID - IMPROVED VERSION                    |
+//+------------------------------------------------------------------+
 string GenerateSignalId(string content)
 {
-    // FIXED: Use parts of the signal for more unique ID
-    string parts[];
-    int partCount = StringSplit(content, '|', parts);
+    // Create a more robust hash
+    ulong hash1 = 5381;
+    ulong hash2 = 0;
     
-    if(partCount >= 5)
-    {
-        // Use: timestamp + channel + symbol + direction
-        string baseId = parts[0] + "_" + parts[1] + "_" + parts[4] + "_" + parts[3];
-        
-        // Create simple hash
-        int hash = 0;
-        for(int i = 0; i < StringLen(baseId); i++)
-        {
-            hash = ((hash * 31) + StringGetCharacter(baseId, i)) % 1000000;
-        }
-        
-        return IntegerToString(hash);
-    }
-    
-    // Fallback to original method
-    int hash = 0;
     for(int i = 0; i < StringLen(content); i++)
     {
-        hash = ((hash * 31) + StringGetCharacter(content, i)) % 1000000;
+        ushort c = StringGetCharacter(content, i);
+        hash1 = ((hash1 << 5) + hash1) + c;
+        hash2 = hash2 * 31 + c;
     }
     
-    return IntegerToString(hash) + "_" + IntegerToString((int)TimeCurrent());
+    // Combine hashes for better uniqueness
+    string finalHash = IntegerToString((int)(hash1 % 1000000)) + "_" + 
+                      IntegerToString((int)(hash2 % 1000000));
+    
+    return finalHash;
 }
 
 //+------------------------------------------------------------------+
@@ -1297,6 +1750,13 @@ bool IsSignalAlreadyProcessed(string signalId)
 //+------------------------------------------------------------------+
 void AddToProcessedSignals(string signalId)
 {
+    // Check if already exists (safety check)
+    for(int i = 0; i < processedSignalCount; i++)
+    {
+        if(processedSignalIds[i] == signalId)
+            return; // Already added
+    }
+    
     // Add to memory array
     if(processedSignalCount >= ArraySize(processedSignalIds))
     {
@@ -1318,7 +1778,6 @@ void AddToProcessedSignals(string signalId)
     if(PrintToExpertLog)
         Print("📝 Signal ID saved: ", signalId, " (Total processed: ", processedSignalCount, ")");
 }
-
 //+------------------------------------------------------------------+
 //| Clean up old processed signal IDs                               |
 //+------------------------------------------------------------------+
@@ -2512,252 +2971,117 @@ void AddToTrackingArray(ulong ticket, string symbol, ENUM_ORDER_TYPE orderType, 
 //+------------------------------------------------------------------+
 void ProcessTrailingStops()
 {
-    for(int i = 0; i < openTradesCount; i++)
-    {
-        if(!positionInfo.SelectByTicket(openTrades[i].ticket))
-            continue;
-        
-        string symbol = openTrades[i].symbol;
-        if(!symbolInfo.Name(symbol))
-            continue;
-        
-        symbolInfo.RefreshRates();
-        
-        double currentPrice = (openTrades[i].orderType == ORDER_TYPE_BUY) ? symbolInfo.Bid() : symbolInfo.Ask();
-        double point = symbolInfo.Point();
-        
-        // Calculate profit in points from open price
-        double profitPoints = 0;
-        if(openTrades[i].orderType == ORDER_TYPE_BUY)
-        {
-            profitPoints = (currentPrice - openTrades[i].openPrice) / point;
-        }
-        else // SELL
-        {
-            profitPoints = (openTrades[i].openPrice - currentPrice) / point;
-        }
-        
-        // Only trail if we have enough profit
-        if(profitPoints >= TrailingStartPips)
-        {
-            double currentSL = positionInfo.StopLoss();
-            double newSL = 0;
-            
-            if(openTrades[i].orderType == ORDER_TYPE_BUY)
-            {
-                // For BUY: new SL = current price - trailing distance
-                newSL = currentPrice - (TrailingStartPips * point);
-                
-                // Only modify if new SL is better than current SL
-                if(currentSL == 0 || newSL > currentSL)
-                {
-                    // Check if we need to move SL (must move by at least TrailingStepPips)
-                    if(currentSL == 0 || (newSL - currentSL) >= TrailingStepPips * point)
-                    {
-                        newSL = symbolInfo.NormalizePrice(newSL);
-                        
-                        if(trade.PositionModify(openTrades[i].ticket, newSL, openTrades[i].takeProfit))
-                        {
-                            openTrades[i].stopLoss = newSL;
-                            openTrades[i].lastTrailingLevel = currentPrice;
-                            
-                            if(PrintToExpertLog)
-                                Print("📈 MT5 Trailing SL updated: Ticket #", openTrades[i].ticket, 
-                                      " (", openTrades[i].originalSymbol, ") | New SL: ", 
-                                      DoubleToString(newSL, symbolInfo.Digits()), 
-                                      " | Profit: ", DoubleToString(profitPoints, 1), " pips");
-                        }
-                        else
-                        {
-                            uint errorCode = trade.ResultRetcode();
-                            string errorDesc = trade.ResultRetcodeDescription();
-                            Print("❌ Failed to trail SL: ", errorDesc, " (", errorCode, ")");
-                        }
-                    }
-                }
-            }
-            else // SELL
-            {
-                // For SELL: new SL = current price + trailing distance
-                newSL = currentPrice + (TrailingStartPips * point);
-                
-                // Only modify if new SL is better than current SL
-                if(currentSL == 0 || newSL < currentSL)
-                {
-                    // Check if we need to move SL (must move by at least TrailingStepPips)
-                    if(currentSL == 0 || (currentSL - newSL) >= TrailingStepPips * point)
-                    {
-                        newSL = symbolInfo.NormalizePrice(newSL);
-                        
-                        if(trade.PositionModify(openTrades[i].ticket, newSL, openTrades[i].takeProfit))
-                        {
-                            openTrades[i].stopLoss = newSL;
-                            openTrades[i].lastTrailingLevel = currentPrice;
-                            
-                            if(PrintToExpertLog)
-                                Print("📈 MT5 Trailing SL updated: Ticket #", openTrades[i].ticket, 
-                                      " (", openTrades[i].originalSymbol, ") | New SL: ", 
-                                      DoubleToString(newSL, symbolInfo.Digits()), 
-                                      " | Profit: ", DoubleToString(profitPoints, 1), " pips");
-                        }
-                        else
-                        {
-                            uint errorCode = trade.ResultRetcode();
-                            string errorDesc = trade.ResultRetcodeDescription();
-                            Print("❌ Failed to trail SL: ", errorDesc, " (", errorCode, ")");
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
+   for(int i = 0; i < openTradesCount; i++)
+   {
+      if(!positionInfo.SelectByTicket(openTrades[i].ticket))
+         continue;
 
+      string symbol = openTrades[i].symbol;
+      if(!symbolInfo.Name(symbol))
+         continue;
+
+      symbolInfo.RefreshRates();
+      double bid = symbolInfo.Bid();
+      double ask = symbolInfo.Ask();
+      double pip = PipSize(symbol);
+
+      double profitPips = (openTrades[i].orderType == ORDER_TYPE_BUY)
+                          ? (bid - openTrades[i].openPrice)  / pip
+                          : (openTrades[i].openPrice - ask) / pip;
+
+      if(profitPips < TrailingStartPips)             // trigger not reached
+         continue;
+
+      double newSL = (openTrades[i].orderType == ORDER_TYPE_BUY)
+                     ? bid - TrailingStepPips * pip
+                     : ask + TrailingStepPips * pip;
+
+      newSL = NormalizeDouble(newSL,
+               (int)SymbolInfoInteger(symbol,SYMBOL_DIGITS));
+
+      // move SL only if it improves by ≥ TrailingStepPips
+      double curSL  = positionInfo.StopLoss();
+      bool   better =
+        (openTrades[i].orderType == ORDER_TYPE_BUY  && (curSL==0 || newSL > curSL + TrailingStepPips*pip)) ||
+        (openTrades[i].orderType == ORDER_TYPE_SELL && (curSL==0 || newSL < curSL - TrailingStepPips*pip));
+
+      if(better && trade.PositionModify(openTrades[i].ticket,newSL,
+                                        openTrades[i].takeProfit))
+      {
+         openTrades[i].stopLoss = newSL;
+
+         if(PrintToExpertLog)
+            Print("📈 Trailing SL -> ",
+                  DoubleToString(newSL,symbolInfo.Digits()),
+                  "  (ticket ",openTrades[i].ticket,")");
+      }
+   }
+}
 //+------------------------------------------------------------------+
 //| Calculate trailing stop loss - MT5 VERSION                      |
 //+------------------------------------------------------------------+
-double CalculateTrailingSL(TradeInfo &tradeInfo, double currentPrice, double point)
+double CalculateTrailingSL(TradeInfo &tradeInfo, double currentPrice)
 {
-    // Get symbol info for proper calculation
-    if(!symbolInfo.Name(tradeInfo.symbol))
-        return tradeInfo.stopLoss;
-    
-    // Convert TrailingStepPips to points based on broker digits
-    double trailingDistancePoints = 0;
-    
-    if(symbolInfo.Digits() == 5 || symbolInfo.Digits() == 3)
-    {
-        trailingDistancePoints = TrailingStepPips * point * 10; // 5-digit broker
-    }
-    else
-    {
-        trailingDistancePoints = TrailingStepPips * point; // 4-digit broker
-    }
-    
-    double newSL = 0;
-    
-    if(tradeInfo.orderType == ORDER_TYPE_BUY)
-    {
-        newSL = currentPrice - trailingDistancePoints;
-        // Only move SL up for buy orders
-        return MathMax(newSL, tradeInfo.stopLoss);
-    }
-    else // SELL
-    {
-        newSL = currentPrice + trailingDistancePoints;
-        // Only move SL down for sell orders
-        return MathMin(newSL, tradeInfo.stopLoss);
-    }
+   string symbol = tradeInfo.symbol;
+   double pip    = PipSize(symbol);
+
+   double newSL  = (tradeInfo.orderType == ORDER_TYPE_BUY)
+                   ? currentPrice - TrailingStepPips * pip
+                   : currentPrice + TrailingStepPips * pip;
+
+   return NormalizeDouble(newSL,
+                          (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS));
 }
 //+------------------------------------------------------------------+
 //| Process breakeven management - FIXED MT5 VERSION                |
 //+------------------------------------------------------------------+
 void ProcessBreakeven()
 {
-    for(int i = 0; i < openTradesCount; i++)
-    {
-        // Skip if already moved to breakeven
-        if(openTrades[i].slMovedToBreakeven)
-            continue;
-        
-        if(!positionInfo.SelectByTicket(openTrades[i].ticket))
-            continue;
-        
-        string symbol = openTrades[i].symbol;
-        if(!symbolInfo.Name(symbol))
-            continue;
-        
-        symbolInfo.RefreshRates();
-        
-        double currentPrice = (openTrades[i].orderType == ORDER_TYPE_BUY) ? symbolInfo.Bid() : symbolInfo.Ask();
-        double point = symbolInfo.Point();
-        
-        // Calculate profit in points
-        double profitPoints = 0;
-        if(openTrades[i].orderType == ORDER_TYPE_BUY)
-        {
-            profitPoints = (currentPrice - openTrades[i].openPrice) / point;
-        }
-        else // SELL
-        {
-            profitPoints = (openTrades[i].openPrice - currentPrice) / point;
-        }
-        
-        // Check if profit is enough to move to breakeven
-        if(profitPoints >= BreakevenAfterPips)
-        {
-            double newSL = 0;
-            double currentSL = positionInfo.StopLoss();
-            
-            if(openTrades[i].orderType == ORDER_TYPE_BUY)
-            {
-                // For BUY: breakeven + plus pips
-                newSL = openTrades[i].openPrice + (BreakevenPlusPips * point);
-                
-                // Make sure new SL is better than current SL
-                if(currentSL == 0 || newSL > currentSL)
-                {
-                    newSL = symbolInfo.NormalizePrice(newSL);
-                    
-                    if(trade.PositionModify(openTrades[i].ticket, newSL, openTrades[i].takeProfit))
-                    {
-                        openTrades[i].stopLoss = newSL;
-                        openTrades[i].slMovedToBreakeven = true;
-                        
-                        if(PrintToExpertLog)
-                            Print("⚖️ MT5 Breakeven set: Ticket #", openTrades[i].ticket, 
-                                  " (", openTrades[i].originalSymbol, ") | SL moved to: ", 
-                                  DoubleToString(newSL, symbolInfo.Digits()), 
-                                  " (Entry + ", BreakevenPlusPips, " pips)");
-                        
-                        if(SendMT5Alerts)
-                            Alert("⚖️ MT5 Breakeven: " + openTrades[i].originalSymbol + 
-                                  " | Ticket #" + IntegerToString((int)openTrades[i].ticket));
-                    }
-                    else
-                    {
-                        uint errorCode = trade.ResultRetcode();
-                        string errorDesc = trade.ResultRetcodeDescription();
-                        Print("❌ Failed to set breakeven: ", errorDesc, " (", errorCode, ")");
-                    }
-                }
-            }
-            else // SELL
-            {
-                // For SELL: breakeven - plus pips
-                newSL = openTrades[i].openPrice - (BreakevenPlusPips * point);
-                
-                // Make sure new SL is better than current SL
-                if(currentSL == 0 || newSL < currentSL)
-                {
-                    newSL = symbolInfo.NormalizePrice(newSL);
-                    
-                    if(trade.PositionModify(openTrades[i].ticket, newSL, openTrades[i].takeProfit))
-                    {
-                        openTrades[i].stopLoss = newSL;
-                        openTrades[i].slMovedToBreakeven = true;
-                        
-                        if(PrintToExpertLog)
-                            Print("⚖️ MT5 Breakeven set: Ticket #", openTrades[i].ticket, 
-                                  " (", openTrades[i].originalSymbol, ") | SL moved to: ", 
-                                  DoubleToString(newSL, symbolInfo.Digits()), 
-                                  " (Entry - ", BreakevenPlusPips, " pips)");
-                        
-                        if(SendMT5Alerts)
-                            Alert("⚖️ MT5 Breakeven: " + openTrades[i].originalSymbol + 
-                                  " | Ticket #" + IntegerToString((int)openTrades[i].ticket));
-                    }
-                    else
-                    {
-                        uint errorCode = trade.ResultRetcode();
-                        string errorDesc = trade.ResultRetcodeDescription();
-                        Print("❌ Failed to set breakeven: ", errorDesc, " (", errorCode, ")");
-                    }
-                }
-            }
-        }
-    }
+   for(int i = 0; i < openTradesCount; i++)
+   {
+      if(openTrades[i].slMovedToBreakeven)
+         continue;
+
+      if(!positionInfo.SelectByTicket(openTrades[i].ticket))
+         continue;
+
+      string symbol = openTrades[i].symbol;
+      if(!symbolInfo.Name(symbol))
+         continue;
+
+      symbolInfo.RefreshRates();
+      double bid = symbolInfo.Bid();
+      double ask = symbolInfo.Ask();
+      double pip = PipSize(symbol);
+
+      double profitPips = (openTrades[i].orderType == ORDER_TYPE_BUY)
+                          ? (bid - openTrades[i].openPrice)  / pip
+                          : (openTrades[i].openPrice - ask) / pip;
+
+      if(profitPips < BreakevenAfterPips)             // not reached yet
+         continue;
+
+      double newSL = (openTrades[i].orderType == ORDER_TYPE_BUY)
+                     ? openTrades[i].openPrice + BreakevenPlusPips * pip
+                     : openTrades[i].openPrice - BreakevenPlusPips * pip;
+
+      newSL = NormalizeDouble(newSL,
+               (int)SymbolInfoInteger(symbol,SYMBOL_DIGITS));
+
+      if(trade.PositionModify(openTrades[i].ticket,newSL,
+                              openTrades[i].takeProfit))
+      {
+         openTrades[i].stopLoss           = newSL;
+         openTrades[i].slMovedToBreakeven = true;
+
+         if(PrintToExpertLog)
+            Print("⚖️ Breakeven SL -> ",
+                  DoubleToString(newSL,symbolInfo.Digits()),
+                  "  (ticket ",openTrades[i].ticket,")");
+      }
+   }
 }
+
 //+------------------------------------------------------------------+
 //| Clean up closed trades from tracking - MT5 VERSION              |
 //+------------------------------------------------------------------+
@@ -3272,3 +3596,15 @@ bool ProcessSignalWithFullValidation(TelegramSignal &signal)
 //| DEVELOPER: islamahmed9717                                      |
 //| UPDATED: 2025-06-20 23:07:34 UTC                              |
 //+------------------------------------------------------------------+
+double PipSize(const string symbol)
+{
+   double point  = SymbolInfoDouble(symbol ,SYMBOL_POINT);
+   int    digits = (int)   SymbolInfoInteger(symbol,SYMBOL_DIGITS);
+
+   // 5-digit, 3-digit, **2-digit** and **1-digit** quotes -> 10 points = 1 pip
+   if(digits == 5 || digits == 3 || digits == 2 || digits == 1)
+      return point * 10.0;
+
+   // everything else (4 / 0 digits …) one point already *is* one pip
+   return point;
+}

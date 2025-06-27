@@ -1,5 +1,6 @@
 ﻿using Newtonsoft.Json;
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
@@ -23,13 +24,18 @@ namespace TelegramEAManager
         private List<ProcessedSignal> allSignals = new List<ProcessedSignal>();
         private FileSystemWatcher? signalFileWatcher;
         private System.Windows.Forms.Timer? cleanupTimer;
+        private readonly HashSet<string> liveFeedIds = new HashSet<string>();
 
         private Form? debugForm = null;
         private bool isDebugFormOpen = false;
         private TextBox? debugConsole = null;
         private readonly object debugLock = new object();
 
-    
+
+        private readonly ConcurrentDictionary<string, DateTime> recentSignalsInUI = new ConcurrentDictionary<string, DateTime>();
+        private readonly SemaphoreSlim uiUpdateSemaphore = new SemaphoreSlim(1, 1);
+        private System.Threading.Timer? uiCleanupTimer;
+
         #endregion
 
         public Form1()
@@ -409,15 +415,23 @@ namespace TelegramEAManager
             telegramService = new TelegramService();
             signalProcessor = new SignalProcessingService();
 
-            // Update to use the new event signature with timestamp
+            // Subscribe to real-time message events
             telegramService.NewMessageReceived += TelegramService_NewMessageReceived;
             telegramService.ErrorOccurred += TelegramService_ErrorOccurred;
             telegramService.DebugMessage += TelegramService_DebugMessage;
 
+            // Subscribe to signal processing events
             signalProcessor.SignalProcessed += SignalProcessor_SignalProcessed;
             signalProcessor.ErrorOccurred += SignalProcessor_ErrorOccurred;
-        }
 
+            // Start UI cleanup timer
+            uiCleanupTimer = new System.Threading.Timer(
+                _ => CleanupRecentSignalsTracker(),
+                null,
+                TimeSpan.FromMinutes(1),
+                TimeSpan.FromMinutes(1)
+            );
+        }
         private void TelegramService_DebugMessage(object? sender, string message)
         {
             LogDebugMessage($"📡 TELEGRAM: {message}");
@@ -471,16 +485,19 @@ namespace TelegramEAManager
                 // Stop existing watcher if any
                 StopSignalFileMonitoring();
 
-                // Create new file watcher
+                // Create new file watcher with buffering
                 signalFileWatcher = new FileSystemWatcher
                 {
                     Path = directory,
                     Filter = "telegram_signals.txt",
-                    NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.Size | NotifyFilters.CreationTime
+                    NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.Size,
+                    // Enable internal buffer to prevent missing events
+                    InternalBufferSize = 65536 // 64KB buffer
                 };
 
-                signalFileWatcher.Changed += OnSignalFileChanged;
-                signalFileWatcher.Created += OnSignalFileChanged;
+                // Use async event handler to prevent blocking
+                signalFileWatcher.Changed += async (sender, e) => await OnSignalFileChangedAsync(sender, e);
+                signalFileWatcher.Created += async (sender, e) => await OnSignalFileChangedAsync(sender, e);
                 signalFileWatcher.EnableRaisingEvents = true;
 
                 LogMessage($"📁 Started monitoring signal file: {signalFilePath}");
@@ -490,7 +507,42 @@ namespace TelegramEAManager
                 LogMessage($"❌ Failed to start file monitoring: {ex.Message}");
             }
         }
+        private async Task OnSignalFileChangedAsync(object sender, FileSystemEventArgs e)
+        {
+            try
+            {
+                // Debounce - wait for file write to complete
+                await Task.Delay(200);
 
+                // Process file change in background
+                await Task.Run(() =>
+                {
+                    try
+                    {
+                        if (this.InvokeRequired)
+                        {
+                            this.BeginInvoke(new Action(() => {
+                                LogMessage($"📝 Signal file updated: {e.ChangeType} at {DateTime.Now:HH:mm:ss}");
+                                UpdateFileStatus(e.FullPath);
+                            }));
+                        }
+                        else
+                        {
+                            LogMessage($"📝 Signal file updated: {e.ChangeType} at {DateTime.Now:HH:mm:ss}");
+                            UpdateFileStatus(e.FullPath);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        LogMessage($"❌ Error processing file change: {ex.Message}");
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                LogMessage($"❌ Error monitoring file: {ex.Message}");
+            }
+        }
         private void StopSignalFileMonitoring()
         {
             if (signalFileWatcher != null)
@@ -529,88 +581,118 @@ namespace TelegramEAManager
 
         private void UpdateFileStatus(string filePath)
         {
-            try
+            Task.Run(async () =>
             {
-                var fileInfo = new FileInfo(filePath);
-                if (fileInfo.Exists)
+                try
                 {
-                    // Read last few lines to show in status
-                    var lines = File.ReadAllLines(filePath);
-                    var lastSignalLine = lines.LastOrDefault(l => !string.IsNullOrWhiteSpace(l) && !l.StartsWith("#"));
+                    // Wait a bit for file to be fully written
+                    await Task.Delay(100);
 
-                    if (!string.IsNullOrEmpty(lastSignalLine))
+                    var fileInfo = new FileInfo(filePath);
+                    if (fileInfo.Exists)
                     {
-                        var parts = lastSignalLine.Split('|');
-                        if (parts.Length >= 11)
-                        {
-                            var timestamp = parts[0];
-                            var channel = parts[2];
-                            var symbol = parts[4];
-                            var direction = parts[3];
-                            var status = parts[10];
+                        string lastSignalInfo = "";
 
-                            LogMessage($"📊 Last signal: {symbol} {direction} from {channel} at {timestamp} - Status: {status}");
+                        // Read file with retry mechanism
+                        for (int i = 0; i < 3; i++)
+                        {
+                            try
+                            {
+                                using (var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+                                using (var reader = new StreamReader(fs))
+                                {
+                                    var lines = new List<string>();
+                                    string line;
+                                    while ((line = await reader.ReadLineAsync()) != null)
+                                    {
+                                        lines.Add(line);
+                                    }
+
+                                    var lastSignalLine = lines.LastOrDefault(l => !string.IsNullOrWhiteSpace(l) && !l.StartsWith("#"));
+                                    if (!string.IsNullOrEmpty(lastSignalLine))
+                                    {
+                                        var parts = lastSignalLine.Split('|');
+                                        if (parts.Length >= 11)
+                                        {
+                                            var timestamp = parts[0];
+                                            var channel = parts[2];
+                                            var symbol = parts[4];
+                                            var direction = parts[3];
+                                            var status = parts[10];
+
+                                            lastSignalInfo = $"📊 Last signal: {symbol} {direction} from {channel} at {timestamp} - Status: {status}";
+                                        }
+                                    }
+                                }
+                                break; // Success, exit retry loop
+                            }
+                            catch (IOException)
+                            {
+                                if (i < 2) await Task.Delay(100); // Wait before retry
+                                else throw; // Last attempt failed
+                            }
+                        }
+
+                        // Update UI
+                        if (this.InvokeRequired)
+                        {
+                            this.BeginInvoke(new Action(() => {
+                                if (!string.IsNullOrEmpty(lastSignalInfo))
+                                    LogMessage(lastSignalInfo);
+
+                                var lblStats = this.Controls.Find("lblStats", true)[0] as Label;
+                                if (lblStats != null)
+                                {
+                                    lblStats.Text = $"📊 Live System | Signals: {allSignals.Count} | File: {fileInfo.Length:N0} bytes | Last update: {fileInfo.LastWriteTime:HH:mm:ss}";
+                                }
+                            }));
                         }
                     }
-
-                    // Update file info in UI
-                    var lblStats = this.Controls.Find("lblStats", true)[0] as Label;
-                    if (lblStats != null)
-                    {
-                        lblStats.Text = $"📊 Live System | Signals: {allSignals.Count} | File: {fileInfo.Length} bytes | Last update: {fileInfo.LastWriteTime:HH:mm:ss}";
-                    }
                 }
-            }
-            catch (Exception ex)
-            {
-                LogMessage($"❌ Error reading file status: {ex.Message}");
-            }
+                catch (Exception ex)
+                {
+                    LogMessage($"❌ Error reading file status: {ex.Message}");
+                }
+            });
         }
 
-        private void TelegramService_NewMessageReceived(object? sender, (string message, long channelId, string channelName, DateTime messageTime) e)
+        // Update the event handler method to match the delegate signature
+        private async void TelegramService_NewMessageReceived(object? sender, (string message, long channelId, string channelName, DateTime messageTime) e)
         {
             try
             {
-                // Process the message with its actual timestamp
-                var processedSignal = signalProcessor.ProcessTelegramMessage(e.message, e.channelId, e.channelName, e.messageTime);
+                // Process the message in a background task to avoid blocking
+                await Task.Run(() =>
+                {
+                    var processedSignal = signalProcessor.ProcessTelegramMessage(e.message, e.channelId, e.channelName);
 
-                // Update UI on main thread
-                if (this.InvokeRequired)
-                {
-                    this.Invoke(new Action(() => {
-                        // Only add non-expired signals to the UI
-                        if (!processedSignal.Status.Contains("Expired"))
+                    // Only add non-duplicate signals
+                    if (!processedSignal.Status.Contains("Duplicate"))
+                    {
+                        // Add to signals list
+                        lock (allSignals)
                         {
-                            AddToLiveSignals(processedSignal);
                             allSignals.Add(processedSignal);
-                            LogMessage($"📨 New message from {e.channelName} at {e.messageTime:HH:mm:ss}: {processedSignal.Status}");
+                            // Keep only last 1000 signals
+                            if (allSignals.Count > 1000)
+                            {
+                                allSignals.RemoveRange(0, allSignals.Count - 1000);
+                            }
                         }
-                        else
-                        {
-                            LogMessage($"⏰ Expired signal from {e.channelName}: {(DateTime.UtcNow - e.messageTime).TotalMinutes:F1} minutes old");
-                        }
-                    }));
-                }
-                else
-                {
-                    if (!processedSignal.Status.Contains("Expired"))
-                    {
+
+                        // Update UI
                         AddToLiveSignals(processedSignal);
-                        allSignals.Add(processedSignal);
-                        LogMessage($"📨 New message from {e.channelName} at {e.messageTime:HH:mm:ss}: {processedSignal.Status}");
+
+                        // Log the signal
+                        LogMessage($"📨 New signal from {e.channelName}: {processedSignal.ParsedData?.Symbol} {processedSignal.ParsedData?.Direction} - {processedSignal.Status}");
                     }
-                    else
-                    {
-                        LogMessage($"⏰ Expired signal from {e.channelName}: {(DateTime.UtcNow - e.messageTime).TotalMinutes:F1} minutes old");
-                    }
-                }
+                });
             }
             catch (Exception ex)
             {
                 LogMessage($"❌ Error processing message: {ex.Message}");
             }
         }
-
         private void UpdateAfterNewSignal(ProcessedSignal processedSignal, long channelId)
         {
             // Add to live signals display
@@ -2044,8 +2126,8 @@ TP 149.50"
                 var processedSignal = signalProcessor.ProcessTelegramMessage(
                     testMessage,
                     999999,
-                    "TEST_CHANNEL",
-                    DateTime.UtcNow  // Add the timestamp parameter
+                    "TEST_CHANNEL"
+                   
                 );
 
                 // Add to signals history and UI
@@ -2086,14 +2168,41 @@ TP 149.50"
         {
             try
             {
+                // Stop all timers
                 uiUpdateTimer?.Stop();
+                uiUpdateTimer?.Dispose();
+
+                cleanupTimer?.Stop();
+                cleanupTimer?.Dispose();
+
+                uiCleanupTimer?.Change(Timeout.Infinite, Timeout.Infinite);
+                uiCleanupTimer?.Dispose();
+
+                // Stop file monitoring
+                StopSignalFileMonitoring();
+
+                // Stop telegram monitoring
                 telegramService?.StopMonitoring();
                 telegramService?.Dispose();
+
+                // Dispose semaphores
+                uiUpdateSemaphore?.Dispose();
+
+                // Clear collections
+                recentSignalsInUI?.Clear();
+                allSignals?.Clear();
+                selectedChannels?.Clear();
+
+                // Force garbage collection
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
             }
-            catch
+            catch (Exception ex)
             {
-                // Ignore cleanup errors
+                // Log error but don't throw
+                Console.WriteLine($"Error during cleanup: {ex.Message}");
             }
+
             base.OnFormClosing(e);
         }
         private void BtnGenerateEAConfig_Click(object? sender, EventArgs e)
@@ -2615,90 +2724,101 @@ TP 149.50"
             }
         }
 
-        private void AddToLiveSignals(ProcessedSignal signal)
+        // Replace the existing AddToLiveSignals method with this:
+        private async void AddToLiveSignals(ProcessedSignal signal)
+        {
+            // Skip duplicate signals
+            if (signal.Status.Contains("Duplicate"))
+                return;
+
+            // Create a unique key for this signal
+            var signalKey = $"{signal.ChannelId}_{signal.ParsedData?.Symbol}_{signal.ParsedData?.Direction}_{signal.DateTime:HHmmss}";
+
+            // Check if we've already added this signal recently
+            if (recentSignalsInUI.TryGetValue(signalKey, out DateTime addedTime))
+            {
+                if ((DateTime.Now - addedTime).TotalSeconds < 30) // Within 30 seconds
+                    return; // Skip duplicate
+            }
+
+            // Add to recent signals tracker
+            recentSignalsInUI[signalKey] = DateTime.Now;
+
+            // Use semaphore to prevent concurrent UI updates
+            await uiUpdateSemaphore.WaitAsync();
+            try
+            {
+                if (this.InvokeRequired)
+                {
+                    this.BeginInvoke(new Action(() => AddSignalToListView(signal)));
+                }
+                else
+                {
+                    AddSignalToListView(signal);
+                }
+            }
+            finally
+            {
+                uiUpdateSemaphore.Release();
+            }
+        }
+        private void AddSignalToListView(ProcessedSignal signal)
         {
             var lvLiveSignals = this.Controls.Find("lvLiveSignals", true)[0] as ListView;
             if (lvLiveSignals == null) return;
 
-            // IMPORTANT: Use the signal's actual timestamp, not current time
-            // The signal.DateTime should already be the correct receive time
-            var signalTime = signal.DateTime;
-
-            // For display, you can choose to show local time or UTC
-            // Here we'll show local time in the UI for user convenience
-            var displayTime = signalTime.ToLocalTime();
-
-            var item = new ListViewItem(displayTime.ToString("HH:mm:ss")); // Display time
-            item.SubItems.Add(signal.ChannelName);
-            item.SubItems.Add(signal.ParsedData?.Symbol ?? "N/A");
-            item.SubItems.Add(signal.ParsedData?.Direction ?? "N/A");
-            item.SubItems.Add(signal.ParsedData?.StopLoss > 0 ? signal.ParsedData.StopLoss.ToString("F5") : "N/A");
-            item.SubItems.Add(signal.ParsedData?.TakeProfit1 > 0 ? signal.ParsedData.TakeProfit1.ToString("F5") : "N/A");
-            item.SubItems.Add(signal.Status);
-
-            // Store the actual UTC timestamp in the Tag for reference
-            item.Tag = new { Signal = signal, UtcTime = signal.DateTime, LocalTime = displayTime };
-
-            // Color coding based on status
-            if (signal.Status.Contains("Processed"))
-                item.BackColor = Color.FromArgb(220, 255, 220); // Light green
-            else if (signal.Status.Contains("Error") || signal.Status.Contains("Invalid"))
-                item.BackColor = Color.FromArgb(255, 220, 220); // Light red
-            else if (signal.Status.Contains("Ignored"))
-                item.BackColor = Color.FromArgb(255, 255, 220); // Light yellow
-            else if (signal.Status.Contains("Test"))
-                item.BackColor = Color.FromArgb(220, 220, 255); // Light blue
-
-            // Insert at top (newest first)
-            lvLiveSignals.Items.Insert(0, item);
-
-            // Keep only last 50 signals
-            while (lvLiveSignals.Items.Count > 50)
+            // Suspend layout to improve performance
+            lvLiveSignals.BeginUpdate();
+            try
             {
-                lvLiveSignals.Items.RemoveAt(lvLiveSignals.Items.Count - 1);
-            }
+                // Convert UTC to local time for display
+                var localTime = signal.DateTime.ToLocalTime();
 
-            // Log the actual timestamp being used
-            LogMessage($"📊 Signal added to live feed - UTC: {signal.DateTime:yyyy-MM-dd HH:mm:ss} | Local: {displayTime:HH:mm:ss}");
+                var item = new ListViewItem(localTime.ToString("HH:mm:ss"));
+                item.SubItems.Add(signal.ChannelName);
+                item.SubItems.Add(signal.ParsedData?.Symbol ?? "N/A");
+                item.SubItems.Add(signal.ParsedData?.Direction ?? "N/A");
+                item.SubItems.Add(signal.ParsedData?.StopLoss > 0 ? signal.ParsedData.StopLoss.ToString("F5") : "N/A");
+                item.SubItems.Add(signal.ParsedData?.TakeProfit1 > 0 ? signal.ParsedData.TakeProfit1.ToString("F5") : "N/A");
+                item.SubItems.Add(signal.Status);
+
+                // Color coding based on status
+                if (signal.Status.Contains("Processed"))
+                    item.BackColor = Color.FromArgb(220, 255, 220); // Light green
+                else if (signal.Status.Contains("Error") || signal.Status.Contains("Invalid"))
+                    item.BackColor = Color.FromArgb(255, 220, 220); // Light red
+                else if (signal.Status.Contains("Ignored"))
+                    item.BackColor = Color.FromArgb(255, 255, 220); // Light yellow
+                else if (signal.Status.Contains("Test"))
+                    item.BackColor = Color.FromArgb(220, 220, 255); // Light blue
+
+                lvLiveSignals.Items.Insert(0, item);
+
+                // Keep only last 50 signals
+                while (lvLiveSignals.Items.Count > 50)
+                {
+                    lvLiveSignals.Items.RemoveAt(lvLiveSignals.Items.Count - 1);
+                }
+            }
+            finally
+            {
+                lvLiveSignals.EndUpdate();
+            }
         }
-        private void AddSignalToListView(ListView lv, ProcessedSignal signal)
+
+        private void CleanupRecentSignalsTracker()
         {
-            // Use local time for display
-            var localTime = signal.DateTime.ToLocalTime();
+            var cutoffTime = DateTime.Now.AddMinutes(-5);
+            var keysToRemove = recentSignalsInUI
+                .Where(kvp => kvp.Value < cutoffTime)
+                .Select(kvp => kvp.Key)
+                .ToList();
 
-            var item = new ListViewItem(localTime.ToString("HH:mm:ss"));
-            item.SubItems.Add(signal.ChannelName);
-            item.SubItems.Add(signal.ParsedData?.Symbol ?? "N/A");
-            item.SubItems.Add(signal.ParsedData?.Direction ?? "N/A");
-            item.SubItems.Add(signal.ParsedData?.StopLoss > 0 ? signal.ParsedData.StopLoss.ToString("F5") : "N/A");
-            item.SubItems.Add(signal.ParsedData?.TakeProfit1 > 0 ? signal.ParsedData.TakeProfit1.ToString("F5") : "N/A");
-            item.SubItems.Add(signal.Status);
-
-            // Color coding based on status
-            if (signal.Status.Contains("Processed"))
-                item.BackColor = Color.FromArgb(220, 255, 220); // Light green
-            else if (signal.Status.Contains("Error") || signal.Status.Contains("Invalid"))
-                item.BackColor = Color.FromArgb(255, 220, 220); // Light red
-            else if (signal.Status.Contains("Duplicate"))
-                item.BackColor = Color.FromArgb(255, 255, 200); // Light yellow
-            else if (signal.Status.Contains("No trading signal"))
-                item.BackColor = Color.FromArgb(240, 240, 240); // Light gray
-
-            lv.Items.Insert(0, item);
-
-            // Ensure the new item is visible
-            item.EnsureVisible();
-
-            // Keep only last 100 signals
-            while (lv.Items.Count > 100)
+            foreach (var key in keysToRemove)
             {
-                lv.Items.RemoveAt(lv.Items.Count - 1);
+                recentSignalsInUI.TryRemove(key, out _);
             }
-
-            // Force refresh
-            lv.Refresh();
         }
-
 
         private void UpdateSelectedChannelsStatus(string status)
         {
@@ -3011,8 +3131,32 @@ System: Windows Forms .NET 9.0 with WTelegramClient
 
         private void LogMessage(string message)
         {
-            AppendDebugMessage($"[LOG] {message}", Color.White);
+            try
+            {
+                if (this.InvokeRequired)
+                {
+                    this.BeginInvoke(new Action(() => LogMessageInternal(message)));
+                }
+                else
+                {
+                    LogMessageInternal(message);
+                }
+            }
+            catch
+            {
+                // Ignore logging errors to prevent crashes
+            }
+        }
+        private void LogMessageInternal(string message)
+        {
             Console.WriteLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {message}");
+
+            // Optionally update a log textbox if you have one
+            // var txtLog = this.Controls.Find("txtLog", true).FirstOrDefault() as TextBox;
+            // if (txtLog != null)
+            // {
+            //     txtLog.AppendText($"[{DateTime.Now:HH:mm:ss}] {message}\r\n");
+            // }
         }
 
         private void SavePhoneNumber(string phoneNumber)
