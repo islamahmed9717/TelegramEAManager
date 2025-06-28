@@ -112,6 +112,7 @@ input bool TradeOnFriday = true;
 input bool TradeOnSaturday = false;
 input bool TradeOnSunday = false;
 
+bool g_ContinuousMonitoring = true;
 //--- MT5 Trading Objects
 CTrade trade;
 CSymbolInfo symbolInfo;
@@ -189,169 +190,84 @@ struct TelegramSignal
 //+------------------------------------------------------------------+
 int OnInit()
 {
-// Initialize broker-specific symbol mapping
-Print("═══════════════════════════════════════════");
-Print("🏦 INITIALIZING BROKER MAPPING");
-Print("═══════════════════════════════════════════");
-InitializeSymbolMappings();
-      
+    // Initialize broker-specific symbol mapping
+    Print("═══════════════════════════════════════════");
+    Print("🏦 INITIALIZING BROKER MAPPING");
+    Print("═══════════════════════════════════════════");
+    InitializeSymbolMappings();
+    
     Print("=================================================================");
-    Print("🚀 TELEGRAM EA MANAGER - FIXED VERSION");
+    Print("🚀 TELEGRAM EA MANAGER - CONTINUOUS MONITORING VERSION");
     Print("=================================================================");
     Print("👤 Developer: islamahmed9717");
-    Print("📅 Version: 2.17 MT5 FIXED - No More Loops!");
-    Print("🔗 GitHub: https://github.com/islamahmed9717");
+    Print("📅 Version: 3.00 MT5 - FIXED CONTINUOUS MONITORING");
     Print("⏰ Signal Expiry: ", MaxSignalAgeMinutes, " minutes");
-    Print("🎯 Platform: MetaTrader 5");
-    Print("📱 Fixed: Processed signals loop issue");
+    Print("🔄 Check Interval: ", SignalCheckInterval, " seconds");
     Print("=================================================================");
     
-   // Validate critical parameters FIRST
-   if(SignalCheckInterval < 1 || SignalCheckInterval > 60)
-   {
-      Print("❌ ERROR: SignalCheckInterval must be between 1 and 60 seconds");
-      Comment("❌ PARAMETER ERROR\nSignalCheckInterval must be 1-60 seconds\nCurrent value: " + IntegerToString(SignalCheckInterval) + "\nPlease fix and restart EA");
-      return(INIT_PARAMETERS_INCORRECT);
-   }
-   
-   if(MaxSignalAgeMinutes < 1 || MaxSignalAgeMinutes > 1440)
-   {
-      Print("❌ ERROR: MaxSignalAgeMinutes must be between 1 and 1440 minutes");
-      Comment("❌ PARAMETER ERROR\nMaxSignalAgeMinutes must be 1-1440 minutes\nCurrent value: " + IntegerToString(MaxSignalAgeMinutes) + "\nPlease fix and restart EA");
-      return(INIT_PARAMETERS_INCORRECT);
-   }
-   
-   if(FixedLotSize <= 0 || FixedLotSize > 100)
-   {
-      Print("❌ ERROR: FixedLotSize must be between 0.01 and 100");
-      Comment("❌ PARAMETER ERROR\nFixedLotSize must be 0.01-100\nCurrent value: " + DoubleToString(FixedLotSize, 2) + "\nPlease fix and restart EA");
-      return(INIT_PARAMETERS_INCORRECT);
-   }
-   
-   if(RiskPercent <= 0 || RiskPercent > 50)
-   {
-      Print("❌ ERROR: RiskPercent must be between 0.1 and 50");
-      Comment("❌ PARAMETER ERROR\nRiskPercent must be 0.1-50%\nCurrent value: " + DoubleToString(RiskPercent, 1) + "%\nPlease fix and restart EA");
-      return(INIT_PARAMETERS_INCORRECT);
-   }
-   
-   if(MaxSpreadPips < 0 || MaxSpreadPips > 100)
-   {
-      Print("❌ ERROR: MaxSpreadPips must be between 0 and 100");
-      Comment("❌ PARAMETER ERROR\nMaxSpreadPips must be 0-100\nCurrent value: " + IntegerToString(MaxSpreadPips) + "\nPlease fix and restart EA");
-      return(INIT_PARAMETERS_INCORRECT);
-   }
-   
-   if(TrailingStartPips < 0 || TrailingStartPips > 1000)
-   {
-      Print("❌ ERROR: TrailingStartPips must be between 0 and 1000");
-      Comment("❌ PARAMETER ERROR\nTrailingStartPips must be 0-1000\nCurrent value: " + IntegerToString(TrailingStartPips) + "\nPlease fix and restart EA");
-      return(INIT_PARAMETERS_INCORRECT);
-   }
-   
-   if(TrailingStepPips < 1 || TrailingStepPips > 100)
-   {
-      Print("❌ ERROR: TrailingStepPips must be between 1 and 100");
-      Comment("❌ PARAMETER ERROR\nTrailingStepPips must be 1-100\nCurrent value: " + IntegerToString(TrailingStepPips) + "\nPlease fix and restart EA");
-      return(INIT_PARAMETERS_INCORRECT);
-   }
-   
-   LoadProcessedSignalIds();
-   
-   // Check trading permissions
-   if(!TerminalInfoInteger(TERMINAL_TRADE_ALLOWED))
-   {
-      Print("❌ ERROR: Trading is not allowed in terminal");
-      Comment("❌ TRADING NOT ALLOWED\nEnable AutoTrading in MT5\nCheck Tools -> Options -> Expert Advisors\nAllow automated trading must be checked");
-      return(INIT_FAILED);
-   }
-   
-   if(!MQLInfoInteger(MQL_TRADE_ALLOWED))
-   {
-      Print("❌ ERROR: Expert Advisor trading is not allowed");
-      Comment("❌ EA TRADING NOT ALLOWED\nCheck if EA trading is enabled\nVerify account permissions\nContact broker if needed");
-      return(INIT_FAILED);
-   }
-   
-   // Validate file path
-   if(StringLen(SignalFilePath) == 0)
-   {
-      Print("❌ ERROR: SignalFilePath cannot be empty");
-      Comment("❌ PARAMETER ERROR\nSignalFilePath cannot be empty\nUse default: telegram_signals.txt");
-      return(INIT_PARAMETERS_INCORRECT);
-   }
-   
-   // Initialize MT5 trading object - CORRECTED
-   trade.SetExpertMagicNumber(magicNumber); // This function returns void, no need to check return value
-   trade.SetMarginMode();
-   trade.SetTypeFillingBySymbol(Symbol());
-   
-   Print("✅ MT5 Trading object initialized with magic number: ", magicNumber);
-   
-   // Initialize arrays with proper error checking
-   if(ArrayResize(processedSignalIds, 0) < 0)
-   {
-      Print("❌ ERROR: Failed to initialize processedSignalIds array");
-      return(INIT_FAILED);
-   }
-   processedSignalCount = 0;
-   
-   if(ArrayResize(openTrades, 0) < 0)
-   {
-      Print("❌ ERROR: Failed to initialize openTrades array");
-      return(INIT_FAILED);
-   }
-   openTradesCount = 0;
-   
-   // Initialize symbol mapping system
-   InitializeSymbolMappings();
-   InitializeSymbolFilters();
-   
-   // Test signal file access
-   if(!TestSignalFileAccess())
-   {
-      Print("❌ ERROR: Cannot access signal file: ", SignalFilePath);
-      Print("💡 Make sure the Windows app is configured with correct MT5 path.");
-      Comment("❌ SIGNAL FILE ERROR\nCannot access: " + SignalFilePath + "\nCheck file permissions\nVerify Windows app configuration\nError: " + IntegerToString(GetLastError()));
-      return(INIT_FAILED);
-   }
-   
-   // Set timer for signal checking
-   if(!EventSetTimer(SignalCheckInterval))
-   {
-      Print("❌ ERROR: Failed to set timer");
-      return(INIT_FAILED);
-   }
-   
-   Print("✅ MT5 Initialization completed successfully!");
-   Print("📊 Configuration Summary:");
-   Print("   • Channel IDs: ", StringLen(ChannelIDs) > 0 ? ChannelIDs : "NOT SET");
-   Print("   • Signal File: ", SignalFilePath);
-   Print("   • Signal Expiry: ", MaxSignalAgeMinutes, " minutes");
-   Print("   • Risk Mode: ", EnumToString(RiskMode));
-   Print("   • Fixed Lot Size: ", DoubleToString(FixedLotSize, 2));
-   Print("   • Symbol Mappings: ", symbolMappingCount, " configured");
-   Print("   • Magic Number: ", magicNumber);
-   Print("   • Trailing Start: ", TrailingStartPips, " pips");
-   Print("   • Trailing Step: ", TrailingStepPips, " pips");
-   
-   // Update display
-   UpdateComment();
-   
-   Print("🚀 MT5 EA is now monitoring for Telegram signals...");
-   Print("⏰ Signals older than ", MaxSignalAgeMinutes, " minutes will be automatically ignored!");
-   Print("📱 Keep the Windows application running and monitoring channels!");
-   
-   if(StringLen(ChannelIDs) == 0)
-   {
-      Print("⚠️ WARNING: No Channel IDs specified!");
-      Print("💡 Use the Windows application to get Channel IDs");
-   }
-   
-     Print("🚀 EA initialized successfully - monitoring for NEW signals only!");
-    Print("📝 Processed signals will be ignored automatically");
-   
-   return(INIT_SUCCEEDED);
+    // Validate and fix check interval
+    int fixedInterval = MathMax(1, MathMin(10, SignalCheckInterval));
+    if(fixedInterval != SignalCheckInterval)
+    {
+        Print("⚠️ Adjusted SignalCheckInterval from ", SignalCheckInterval, " to ", fixedInterval, " seconds");
+    }
+    
+    // Initialize arrays
+    ArrayResize(processedSignalIds, 1000);
+    processedSignalCount = 0;
+    ArrayResize(openTrades, 0);
+    openTradesCount = 0;
+    
+    // Load previously processed signals
+    LoadProcessedSignalIds();
+    
+    // Check trading permissions
+    if(!TerminalInfoInteger(TERMINAL_TRADE_ALLOWED))
+    {
+        Print("❌ ERROR: Trading is not allowed in terminal");
+        return(INIT_FAILED);
+    }
+    
+    if(!MQLInfoInteger(MQL_TRADE_ALLOWED))
+    {
+        Print("❌ ERROR: Expert Advisor trading is not allowed");
+        return(INIT_FAILED);
+    }
+    
+    // Initialize MT5 trading object
+    trade.SetExpertMagicNumber(magicNumber);
+    trade.SetMarginMode();
+    trade.SetTypeFillingBySymbol(Symbol());
+    
+    // Initialize symbol mapping and filters
+    InitializeSymbolMappings();
+    InitializeSymbolFilters();
+    
+    // Test signal file access
+    if(!TestSignalFileAccess())
+    {
+        Print("❌ ERROR: Cannot access signal file: ", SignalFilePath);
+        return(INIT_FAILED);
+    }
+    
+    // Set timer with validated interval
+    if(!EventSetTimer(fixedInterval))
+    {
+        Print("❌ ERROR: Failed to set timer");
+        return(INIT_FAILED);
+    }
+    
+    Print("✅ MT5 EA initialized successfully!");
+    Print("🔄 Continuous monitoring active - checking every ", fixedInterval, " seconds");
+    Print("📁 Monitoring file: ", SignalFilePath);
+    
+    // Initialize monitoring state
+    g_ContinuousMonitoring = true;
+    g_lastFileCheck = 0;  // Force immediate check
+    
+    UpdateComment();
+    
+    return(INIT_SUCCEEDED);
 }
 
 //+------------------------------------------------------------------+
@@ -424,19 +340,21 @@ void OnTick()
 //+------------------------------------------------------------------+
 void OnTimer()
 {
-    static int timerCalls = 0;
-    timerCalls++;
-    
-    // FIXED: Only check for signals every 3rd timer call (15 seconds with 5-second timer)
-    if(timerCalls % 3 == 0)
+    // Check if monitoring is enabled
+    if(!g_ContinuousMonitoring)
     {
-        CheckForNewSignals();
+        Print("⏸️ Monitoring paused");
+        return;
     }
     
-    // Update trailing stops and breakeven
+    // Always check for new signals (no skipping)
+    CheckForNewSignals();
+    
+    // Update trailing stops if enabled
     if(UseTrailingStop && openTradesCount > 0)
         ProcessTrailingStops();
     
+    // Process breakeven if enabled
     if(MoveSLToBreakeven && openTradesCount > 0)
         ProcessBreakeven();
     
@@ -444,16 +362,31 @@ void OnTimer()
     if(openTradesCount > 0)
         CleanupClosedPositions();
     
-    // FIXED: Update comment less frequently
-    if(timerCalls % 6 == 0) // Every 30 seconds
+    // Update display every 5 seconds
+    static datetime lastUIUpdate = 0;
+    if(TimeCurrent() - lastUIUpdate >= 5)
     {
         UpdateComment();
-        CleanupOldProcessedSignals();
+        lastUIUpdate = TimeCurrent();
     }
     
-    // FIXED: Reset counter to prevent overflow
-    if(timerCalls >= 1000)
-        timerCalls = 0;
+    // Cleanup old signals every minute
+    static datetime lastCleanup = 0;
+    if(TimeCurrent() - lastCleanup >= 60)
+    {
+        CleanupOldProcessedSignals();
+        lastCleanup = TimeCurrent();
+    }
+    
+    // Log monitoring status every minute
+    static datetime lastStatusLog = 0;
+    if(PrintToExpertLog && TimeCurrent() - lastStatusLog >= 60)
+    {
+        Print("📊 Monitoring Active | Signals: ", totalSignalsProcessed, 
+              " | Trades: ", totalTradesExecuted,
+              " | Time: ", TimeToString(TimeCurrent(), TIME_SECONDS));
+        lastStatusLog = TimeCurrent();
+    }
 }
 
 //+------------------------------------------------------------------+
@@ -1050,21 +983,40 @@ void CheckForNewSignals()
     if(!IsTimeToTrade())
         return;
     
-    // Don't check too frequently
-    datetime currentTime = TimeCurrent();
-    if(currentTime - g_lastFileCheck < 3) // Minimum 3 seconds between checks
-        return;
-    g_lastFileCheck = currentTime;
+    string filename = SignalFilePath;
     
-    string filename = "telegram_signals.txt";
+    // Check if file is being written (with timeout)
+    if(IsFileBeingWritten(filename))
+    {
+        if(PrintToExpertLog)
+            Print("⏳ File is being written, will check next cycle");
+        return;
+    }
     
     int fileHandle = FileOpen(filename, FILE_READ|FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_TXT|FILE_ANSI);
     if(fileHandle == INVALID_HANDLE)
     {
-        if(PrintToExpertLog && totalSignalsProcessed == 0)
-            Print("📁 Signal file not found: ", filename);
+        static datetime lastErrorLog = 0;
+        if(TimeCurrent() - lastErrorLog > 30)  // Log error every 30 seconds max
+        {
+            Print("📁 Signal file not accessible: ", filename);
+            lastErrorLog = TimeCurrent();
+        }
         return;
     }
+    
+    // Check file size
+    long fileSize = FileSize(fileHandle);
+    if(fileSize == 0)
+    {
+        FileClose(fileHandle);
+        return;
+    }
+    
+    // Track file changes
+    static long lastFileSize = 0;
+    static string lastLineProcessed = "";
+    bool fileChanged = (fileSize != lastFileSize);
     
     // Read all lines
     string allLines[];
@@ -1082,14 +1034,12 @@ void CheckForNewSignals()
     }
     FileClose(fileHandle);
     
-    // Count and process signals
-    int newSignalsCount = 0;
-    int processedSignalsCount = 0;
-    int newSignalsFound = 0;
+    // Update file size tracker
+    lastFileSize = fileSize;
     
-    // Debug logging
-    if(PrintToExpertLog)
-        Print("🔍 Checking file with ", totalLines, " total lines");
+    // Process signals
+    int newSignalsCount = 0;
+    int processedCount = 0;
     
     for(int i = 0; i < totalLines; i++)
     {
@@ -1100,49 +1050,58 @@ void CheckForNewSignals()
         // Skip empty lines and comments
         if(StringLen(line) == 0 || StringFind(line, "#") == 0)
             continue;
-            
-        // Count signals by status
+        
+        // Check if this is a NEW signal
         if(StringFind(line, "|NEW") > 0)
         {
+            // Skip if we just processed this exact line
+            if(line == lastLineProcessed)
+                continue;
+                
             newSignalsCount++;
             
-            // Process ALL NEW signals without line comparison
+            // Process the signal
             if(ProcessFormattedSignalLineFixed(line))
             {
-                newSignalsFound++;
+                processedCount++;
+                lastLineProcessed = line;
             }
-        }
-        else if(StringFind(line, "|PROCESSED") > 0)
-        {
-            processedSignalsCount++;
         }
     }
     
-    // Logging
-    if(PrintToExpertLog)
+    // Log status if there were changes
+    if(fileChanged || newSignalsCount > 0)
     {
-        if(newSignalsFound > 0)
+        if(PrintToExpertLog)
         {
-            Print("✅ Found and processed ", newSignalsFound, " NEW signals");
-            Print("📊 File status: ", newSignalsCount, " NEW, ", processedSignalsCount, " PROCESSED");
-        }
-        else if(newSignalsCount > 0)
-        {
-            Print("🔍 Found ", newSignalsCount, " NEW signals in file but none were processed (likely duplicates)");
-        }
-        else if(processedSignalsCount > 0)
-        {
-            // Only print this occasionally to avoid spam
-            static datetime lastNoNewSignalsLog = 0;
-            if(currentTime - lastNoNewSignalsLog > 60) // Log once per minute
-            {
-                Print("📂 File check: No NEW signals found (", processedSignalsCount, " already processed)");
-                lastNoNewSignalsLog = currentTime;
-            }
+            Print("📊 File check: Size=", fileSize, " bytes, Lines=", totalLines, 
+                  ", NEW signals=", newSignalsCount, ", Processed=", processedCount);
         }
     }
+    
+    g_lastFileCheck = TimeCurrent();
 }
 
+bool IsFileBeingWritten(string filepath)
+{
+    // Try to open file for write access
+    int testHandle = FileOpen(filepath, FILE_WRITE|FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_TXT|FILE_ANSI);
+    
+    if(testHandle == INVALID_HANDLE)
+    {
+        // Check specific error
+        int error = GetLastError();
+        if(error == 5004 || error == 5002)  // File is locked or access denied
+        {
+            return true;  // File is being written
+        }
+        return false;  // Other error
+    }
+    
+    // File is not being written, close it
+    FileClose(testHandle);
+    return false;
+}
 bool ProcessFormattedSignalLineFixed(string line)
 {
     string parts[];
@@ -1155,33 +1114,28 @@ bool ProcessFormattedSignalLineFixed(string line)
         return false;
     }
     
-    // Check signal status first
+    // Check signal status
     string signalStatus = parts[10];
     StringTrimLeft(signalStatus);
     StringTrimRight(signalStatus);
     
-    // Only process NEW signals
     if(signalStatus != "NEW")
-    {
-        return false; // Don't log, just skip
-    }
+        return false;
     
-    // Generate unique signal ID using all important components
-    string uniqueKey = parts[0] + "_" + parts[1] + "_" + parts[4] + "_" + parts[3] + "_" + parts[5] + "_" + parts[6];
+    // Generate unique signal ID
+    string uniqueKey = parts[0] + "_" + parts[1] + "_" + parts[4] + "_" + parts[3] + "_" + GetTickCount();
     string signalId = GenerateSignalId(uniqueKey);
     
-    // Check if already processed FIRST before doing anything else
+    // Check if already processed
     if(IsSignalAlreadyProcessedFixed(signalId))
     {
-        if(PrintToExpertLog)
-            Print("⏭️ Signal already processed (ID: ", signalId, ")");
-        return false; // Don't count as newly processed
+        return false;
     }
     
     if(PrintToExpertLog)
-        Print("🆕 Found NEW unprocessed signal, ID: ", signalId);
+        Print("🆕 Processing NEW signal, ID: ", signalId);
     
-    // Now create and populate the signal
+    // Create signal object
     TelegramSignal signal;
     signal.signalId = signalId;
     signal.receivedTime = TimeCurrent();
@@ -1198,17 +1152,14 @@ bool ProcessFormattedSignalLineFixed(string line)
     // Check signal age
     long signalAgeMinutes = (TimeCurrent() - signal.signalTime) / 60;
     
-    if(PrintToExpertLog)
-        Print("⏰ Signal age: ", (int)signalAgeMinutes, " minutes (Max: ", MaxSignalAgeMinutes, ")");
-    
     if(signalAgeMinutes > MaxSignalAgeMinutes)
     {
         if(PrintToExpertLog)
             Print("⏰ Signal expired: ", (int)signalAgeMinutes, " minutes old");
         
         totalExpiredSignals++;
-        AddToProcessedSignals(signal.signalId); // Mark as processed so we don't check again
-        MarkSignalAsProcessedInFileFixed(line);
+        AddToProcessedSignals(signal.signalId);
+        UpdateSignalStatusInFile(line, "EXPIRED");
         return true;
     }
     
@@ -1227,16 +1178,6 @@ bool ProcessFormattedSignalLineFixed(string line)
     signal.isExpired = false;
     signal.isProcessed = false;
     
-    if(PrintToExpertLog)
-    {
-        Print("📊 Processing signal:");
-        Print("   Symbol: ", signal.originalSymbol, " → ", signal.finalSymbol);
-        Print("   Direction: ", signal.direction);
-        Print("   Entry: ", signal.entryPrice > 0 ? DoubleToString(signal.entryPrice, 5) : "Market");
-        Print("   SL: ", signal.stopLoss > 0 ? DoubleToString(signal.stopLoss, 5) : "None");
-        Print("   TP1: ", signal.takeProfit1 > 0 ? DoubleToString(signal.takeProfit1, 5) : "None");
-    }
-    
     // Validate and process
     if(ValidateSignal(signal))
     {
@@ -1245,7 +1186,7 @@ bool ProcessFormattedSignalLineFixed(string line)
             
         ProcessValidatedSignal(signal);
         AddToProcessedSignals(signal.signalId);
-        MarkSignalAsProcessedInFileFixed(line);
+        UpdateSignalStatusInFile(line, "PROCESSED");
         
         return true;
     }
@@ -1253,12 +1194,11 @@ bool ProcessFormattedSignalLineFixed(string line)
     {
         if(PrintToExpertLog)
             Print("❌ Signal validation failed");
-        AddToProcessedSignals(signal.signalId); // Still mark as processed to avoid re-checking
-        MarkSignalAsProcessedInFileFixed(line);
+        AddToProcessedSignals(signal.signalId);
+        UpdateSignalStatusInFile(line, "INVALID");
         return false;
     }
 }
-
 bool IsSignalAlreadyProcessedFixed(string signalId)
 {
     // Check in-memory array
@@ -1569,17 +1509,40 @@ bool ValidateStopLevels(TelegramSignal &signal)
 
 void UpdateSignalStatusInFile(string originalLine, string newStatus)
 {
-    if(!PrintToExpertLog) return;
+    // Queue the update instead of doing it immediately
+    static string pendingUpdates[];
+    static int pendingCount = 0;
     
-    string fileName = "telegram_signals.txt";
-    int readHandle = FileOpen(fileName, FILE_READ|FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_TXT|FILE_ANSI);
+    // Add to pending updates
+    if(pendingCount >= ArraySize(pendingUpdates))
+        ArrayResize(pendingUpdates, pendingCount + 100);
+        
+    pendingUpdates[pendingCount] = originalLine + "|||" + newStatus;
+    pendingCount++;
     
+    // Process pending updates every 10 signals or every 5 seconds
+    static datetime lastBatchUpdate = 0;
+    if(pendingCount >= 10 || (pendingCount > 0 && TimeCurrent() - lastBatchUpdate >= 5))
+    {
+        ProcessPendingFileUpdates(pendingUpdates, pendingCount);
+        pendingCount = 0;
+        lastBatchUpdate = TimeCurrent();
+    }
+}
+
+void ProcessPendingFileUpdates(string &updates[], int count)
+{
+    if(count == 0) return;
+    
+    string fileName = SignalFilePath;
+    
+    // Try to read file
+    int readHandle = FileOpen(fileName, FILE_READ|FILE_SHARE_WRITE|FILE_TXT|FILE_ANSI);
     if(readHandle == INVALID_HANDLE) return;
     
     string allLines[];
     int lineCount = 0;
     
-    // Read all lines
     while(!FileIsEnding(readHandle))
     {
         string line = FileReadString(readHandle);
@@ -1589,31 +1552,35 @@ void UpdateSignalStatusInFile(string originalLine, string newStatus)
     }
     FileClose(readHandle);
     
-    // Find and update the line
-    bool updated = false;
-    for(int i = 0; i < lineCount; i++)
+    // Update lines
+    for(int i = 0; i < count; i++)
     {
-        if(StringFind(allLines[i], originalLine) >= 0)
+        string parts[];
+        if(StringSplit(updates[i], "|||", parts) == 2)
         {
-            StringReplace(allLines[i], "|NEW", "|" + newStatus);
-            updated = true;
-            break;
+            string originalLine = parts[0];
+            string newStatus = parts[1];
+            
+            for(int j = 0; j < lineCount; j++)
+            {
+                if(StringFind(allLines[j], originalLine) >= 0 && StringFind(allLines[j], "|NEW") >= 0)
+                {
+                    StringReplace(allLines[j], "|NEW", "|" + newStatus);
+                    break;
+                }
+            }
         }
     }
     
-    if(updated)
+    // Write back
+    int writeHandle = FileOpen(fileName, FILE_WRITE|FILE_SHARE_READ|FILE_TXT|FILE_ANSI);
+    if(writeHandle != INVALID_HANDLE)
     {
-        // Write back all lines
-        int writeHandle = FileOpen(fileName, FILE_WRITE|FILE_SHARE_READ|FILE_TXT|FILE_ANSI);
-        if(writeHandle != INVALID_HANDLE)
+        for(int i = 0; i < lineCount; i++)
         {
-            for(int i = 0; i < lineCount; i++)
-            {
-                FileWriteString(writeHandle, allLines[i] + (i < lineCount-1 ? "\n" : ""));
-            }
-            FileClose(writeHandle);
-            Print("✅ Updated signal status to: ", newStatus);
+            FileWriteString(writeHandle, allLines[i] + "\n");
         }
+        FileClose(writeHandle);
     }
 }
 
@@ -1677,24 +1644,30 @@ void ProcessTextBasedSignal(string signalText)
 //+------------------------------------------------------------------+
 string GenerateSignalId(string content)
 {
+    // Add timestamp and tick count for uniqueness
+    string uniqueContent = content + TimeToString(TimeCurrent(), TIME_DATE|TIME_SECONDS) + IntegerToString(GetTickCount());
+    
     // Create a more robust hash
     ulong hash1 = 5381;
     ulong hash2 = 0;
     
-    for(int i = 0; i < StringLen(content); i++)
+    for(int i = 0; i < StringLen(uniqueContent); i++)
     {
-        ushort c = StringGetCharacter(content, i);
+        ushort c = StringGetCharacter(uniqueContent, i);
         hash1 = ((hash1 << 5) + hash1) + c;
         hash2 = hash2 * 31 + c;
     }
     
-    // Combine hashes for better uniqueness
+    // Include microseconds for extra uniqueness
+    long mcs = GetMicrosecondCount();
+    
+    // Combine hashes
     string finalHash = IntegerToString((int)(hash1 % 1000000)) + "_" + 
-                      IntegerToString((int)(hash2 % 1000000));
+                      IntegerToString((int)(hash2 % 1000000)) + "_" +
+                      IntegerToString((int)(mcs % 1000));
     
     return finalHash;
 }
-
 //+------------------------------------------------------------------+
 //| Parse timestamp from string                                     |
 //+------------------------------------------------------------------+
@@ -1750,55 +1723,108 @@ bool IsSignalAlreadyProcessed(string signalId)
 //+------------------------------------------------------------------+
 void AddToProcessedSignals(string signalId)
 {
-    // Check if already exists (safety check)
+    // Check if already exists
     for(int i = 0; i < processedSignalCount; i++)
     {
         if(processedSignalIds[i] == signalId)
-            return; // Already added
+            return;
     }
     
-    // Add to memory array
+    // Resize array if needed
     if(processedSignalCount >= ArraySize(processedSignalIds))
     {
-        ArrayResize(processedSignalIds, processedSignalCount + 100);
+        int newSize = ArraySize(processedSignalIds) + 1000;
+        if(ArrayResize(processedSignalIds, newSize) < 0)
+        {
+            Print("❌ Failed to resize processed signals array");
+            return;
+        }
     }
     
+    // Add to array
     processedSignalIds[processedSignalCount] = signalId;
     processedSignalCount++;
     
-    // Save to persistent file
-    int fileHandle = FileOpen(processedSignalIdsFile, FILE_READ|FILE_WRITE|FILE_TXT|FILE_ANSI);
-    if(fileHandle != INVALID_HANDLE)
-    {
-        FileSeek(fileHandle, 0, SEEK_END);
-        FileWriteString(fileHandle, signalId + "|" + TimeToString(TimeCurrent(), TIME_DATE|TIME_MINUTES) + "\n");
-        FileClose(fileHandle);
-    }
+    // Save to file (non-blocking)
+    SaveProcessedSignalIdAsync(signalId);
     
-    if(PrintToExpertLog)
-        Print("📝 Signal ID saved: ", signalId, " (Total processed: ", processedSignalCount, ")");
+    if(PrintToExpertLog && processedSignalCount % 100 == 0)
+        Print("📝 Processed signals count: ", processedSignalCount);
+}void SaveProcessedSignalIdAsync(string signalId)
+{
+    // Use a separate file for processed IDs to avoid conflicts
+    static string queuedIds[];
+    static int queuedCount = 0;
+    static datetime lastSave = 0;
+    
+    // Add to queue
+    if(queuedCount >= ArraySize(queuedIds))
+        ArrayResize(queuedIds, queuedCount + 100);
+        
+    queuedIds[queuedCount] = signalId + "|" + TimeToString(TimeCurrent(), TIME_DATE|TIME_MINUTES);
+    queuedCount++;
+    
+    // Save batch every 10 IDs or every 5 seconds
+    if(queuedCount >= 10 || (queuedCount > 0 && TimeCurrent() - lastSave >= 5))
+    {
+        // Write to file
+        int fileHandle = FileOpen(processedSignalIdsFile, FILE_READ|FILE_WRITE|FILE_TXT|FILE_ANSI);
+        if(fileHandle != INVALID_HANDLE)
+        {
+            // Move to end of file
+            FileSeek(fileHandle, 0, SEEK_END);
+            
+            // Write queued IDs
+            for(int i = 0; i < queuedCount; i++)
+            {
+                FileWriteString(fileHandle, queuedIds[i] + "\n");
+            }
+            
+            FileClose(fileHandle);
+        }
+        
+        // Reset queue
+        queuedCount = 0;
+        lastSave = TimeCurrent();
+    }
 }
 //+------------------------------------------------------------------+
 //| Clean up old processed signal IDs                               |
 //+------------------------------------------------------------------+
 void CleanupOldProcessedSignals()
 {
-   // Keep only last 1000 processed signals to prevent memory issues
-   if(processedSignalCount > 1000)
-   {
-      int keepCount = 500; // Keep last 500
-      
-      for(int i = 0; i < keepCount; i++)
-      {
-         processedSignalIds[i] = processedSignalIds[processedSignalCount - keepCount + i];
-      }
-      
-      ArrayResize(processedSignalIds, keepCount);
-      processedSignalCount = keepCount;
-      
-      if(PrintToExpertLog)
-         Print("🧹 MT5 Cleaned up old processed signals. Keeping last ", keepCount, " entries.");
-   }
+    // Only cleanup if we have too many signals
+    if(processedSignalCount < 5000)
+        return;
+        
+    // Create new array with recent signals only
+    string tempArray[];
+    int tempCount = 0;
+    int keepCount = 2000;  // Keep last 2000 signals
+    
+    // Calculate starting index
+    int startIndex = processedSignalCount - keepCount;
+    if(startIndex < 0) startIndex = 0;
+    
+    // Copy recent signals to temp array
+    ArrayResize(tempArray, keepCount);
+    for(int i = startIndex; i < processedSignalCount; i++)
+    {
+        tempArray[tempCount] = processedSignalIds[i];
+        tempCount++;
+    }
+    
+    // Replace old array with temp array
+    ArrayResize(processedSignalIds, keepCount + 1000);  // Add buffer
+    for(int i = 0; i < tempCount; i++)
+    {
+        processedSignalIds[i] = tempArray[i];
+    }
+    processedSignalCount = tempCount;
+    
+    if(PrintToExpertLog)
+        Print("🧹 Cleaned up processed signals. Kept last ", tempCount, " entries");
+        
 }
 // Load processed IDs on startup
 void LoadProcessedSignalIds()
