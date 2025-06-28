@@ -35,8 +35,6 @@ namespace TelegramEAManager
             LoadSignalsHistory();
 
             ClearSignalFileOnStartup();
-
-
         }
         private string GenerateMessageHash(string messageText, long channelId)
         {
