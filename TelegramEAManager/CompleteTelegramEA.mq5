@@ -268,38 +268,10 @@ int OnInit()
     g_lastFileCheck = 0;  // Force immediate check
     
     UpdateComment();
-    InitializeFileTracking();
+  
 
     
     return(INIT_SUCCEEDED);
-}
-void InitializeFileTracking()
-{
-   int fileHandle = FileOpen(SignalFilePath, FILE_READ|FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_TXT|FILE_ANSI);
-   if(fileHandle != INVALID_HANDLE)
-   {
-      // Get initial file size and line count
-      g_lastFileSize = FileSize(fileHandle);
-      
-      // Count lines
-      g_lastLineCount = 0;
-      while(!FileIsEnding(fileHandle))
-      {
-         FileReadString(fileHandle);
-         g_lastLineCount++;
-      }
-      
-      FileClose(fileHandle);
-      Print("📊 File tracking initialized - Size: ", g_lastFileSize, " bytes, Lines: ", g_lastLineCount);
-   }
-   else
-   {
-      g_lastFileSize = 0;
-      g_lastLineCount = 0;
-      Print("📊 File tracking initialized for new file");
-   }
-   
-   g_lastFileCheck = TimeCurrent();
 }
 
 //+------------------------------------------------------------------+

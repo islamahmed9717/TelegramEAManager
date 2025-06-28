@@ -430,25 +430,31 @@ namespace TelegramEAManager
 
         private string FormatSignalForEA(ProcessedSignal signal)
         {
-            // Always use UTC time for consistency
+            // CRITICAL: Use the exact timestamp format the EA expects
             var utcTime = DateTime.Now;
 
+            // EA expects: yyyy.MM.dd HH:mm:ss format
             var formatted = $"{utcTime:yyyy.MM.dd HH:mm:ss}|" +
-                           $"{signal.ChannelId}|" +
-                           $"{signal.ChannelName}|" +
-                           $"{signal.ParsedData?.Direction ?? "BUY"}|" +
-                           $"{signal.ParsedData?.FinalSymbol ?? signal.ParsedData?.Symbol ?? "EURUSD"}|" +
-                           $"{(signal.ParsedData?.EntryPrice ?? 0):F5}|" +
-                           $"{(signal.ParsedData?.StopLoss ?? 0):F5}|" +
-                           $"{(signal.ParsedData?.TakeProfit1 ?? 0):F5}|" +
-                           $"{(signal.ParsedData?.TakeProfit2 ?? 0):F5}|" +
-                           $"{(signal.ParsedData?.TakeProfit3 ?? 0):F5}|" +
-                           $"NEW";
+                            $"{signal.ChannelId}|" +
+                            $"{signal.ChannelName}|" +
+                            $"{signal.ParsedData?.Direction ?? "BUY"}|" +
+                            $"{signal.ParsedData?.FinalSymbol ?? signal.ParsedData?.Symbol ?? "EURUSD"}|" +
+                            $"{(signal.ParsedData?.EntryPrice ?? 0):F5}|" +
+                            $"{(signal.ParsedData?.StopLoss ?? 0):F5}|" +
+                            $"{(signal.ParsedData?.TakeProfit1 ?? 0):F5}|" +
+                            $"{(signal.ParsedData?.TakeProfit2 ?? 0):F5}|" +
+                            $"{(signal.ParsedData?.TakeProfit3 ?? 0):F5}|" +
+                            $"NEW";
 
-            OnDebugMessage($"Signal formatted for EA: {formatted}");
+            // Debug log with proper formatting
+            Console.WriteLine($"[{utcTime:HH:mm:ss} UTC] Writing signal to EA:");
+            Console.WriteLine($"  Signal ID: {signal.Id}");
+            Console.WriteLine($"  Symbol: {signal.ParsedData?.Symbol} -> {signal.ParsedData?.FinalSymbol}");
+            Console.WriteLine($"  Direction: {signal.ParsedData?.Direction}");
+            Console.WriteLine($"  Formatted line: {formatted}");
+
             return formatted;
         }
-
         /// <summary>
         /// Parse trading signal from message text using regex patterns
         /// </summary>
