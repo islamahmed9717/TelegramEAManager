@@ -119,10 +119,9 @@ CSymbolInfo symbolInfo;
 CPositionInfo positionInfo;
 COrderInfo orderInfo;
 
-
-static long g_lastFileSize = 0;
+static int g_lastFileSize = 0;
 static datetime g_lastFileCheck = 0;
-static string g_lastProcessedLine = "";  // Track last processed line
+static int g_lastProcessedLine = 0;
 static int g_totalLinesProcessed = 0;    // Track total lines processed
 
 //--- Global Variables
@@ -984,91 +983,82 @@ static ulong  g_lastSize = 0;   // file size last time we checked
 //+------------------------------------------------------------------+
 void CheckForNewSignals()
 {
-   datetime currentTime = TimeCurrent();
-   
-   // Don't check too frequently
-   if(currentTime - g_lastFileCheck < 2) // Minimum 2 seconds between checks
-      return;
-   
-   g_lastFileCheck = currentTime;
-   
-   if(PrintToExpertLog)
-      Print("🔍 Checking for new signals at ", TimeToString(currentTime, TIME_DATE|TIME_MINUTES));
-   
-   int fileHandle = FileOpen(SignalFilePath, FILE_READ|FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_TXT|FILE_ANSI);
-   if(fileHandle == INVALID_HANDLE)
-   {
-      if(PrintToExpertLog && totalSignalsProcessed == 0)
-         Print("📁 Signal file not found: ", SignalFilePath);
-      return;
-   }
-   
-   // Check if file has changed
-   long currentFileSize = FileSize(fileHandle);
-   bool fileChanged = (currentFileSize != g_lastFileSize);
-   
-   if(!fileChanged)
-   {
-      FileClose(fileHandle);
-      return; // No changes in file
-   }
-   
-   if(PrintToExpertLog)
-      Print("📄 File changed - Size: ", currentFileSize, " (was: ", g_lastFileSize, ")");
-   
-   // Read all lines
-   string allLines[];
-   int totalLines = 0;
-   
-   while(!FileIsEnding(fileHandle))
-   {
-      string line = FileReadString(fileHandle);
-      if(FileIsEnding(fileHandle) && StringLen(line) == 0)
-         break;
-         
-      ArrayResize(allLines, totalLines + 1);
-      allLines[totalLines] = line;
-      totalLines++;
-   }
-   FileClose(fileHandle);
-   
-   // Update tracking variables
-   g_lastFileSize = currentFileSize;
-   
-   // Process new lines only
-   int newLinesCount = totalLines - g_lastLineCount;
-   if(newLinesCount > 0)
-   {
-      if(PrintToExpertLog)
-         Print("📊 Found ", newLinesCount, " new lines in file");
-      
-      // Process only the new lines
-      for(int i = g_lastLineCount; i < totalLines; i++)
-      {
-         string line = allLines[i];
-         StringTrimLeft(line);
-         StringTrimRight(line);
-         
-         // Skip empty lines and comments
-         if(StringLen(line) == 0 || StringFind(line, "#") == 0)
+    if(!IsTimeToTrade())
+        return;
+    
+    // Don't check too frequently
+    datetime currentTime = TimeCurrent();
+    if(currentTime - g_lastFileCheck < 3) // Minimum 3 seconds between checks
+        return;
+    g_lastFileCheck = currentTime;
+    
+    string filename = "telegram_signals.txt";
+    
+    int fileHandle = FileOpen(filename, FILE_READ|FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_TXT|FILE_ANSI);
+    if(fileHandle == INVALID_HANDLE)
+    {
+        if(PrintToExpertLog && totalSignalsProcessed == 0)
+            Print("📁 Signal file not found: ", filename);
+        return;
+    }
+    
+    // Get file size
+    FileSeek(fileHandle, 0, SEEK_END);
+    int currentFileSize = (int)FileTell(fileHandle);
+    
+    // If file is smaller than before, it was truncated - reset
+    if(currentFileSize < g_lastFileSize)
+    {
+        g_lastFileSize = 0;
+        g_lastProcessedLine = 0;
+        Print("📝 Signal file was reset");
+    }
+    
+    // If no new content, skip
+    if(currentFileSize == g_lastFileSize)
+    {
+        FileClose(fileHandle);
+        return;
+    }
+    
+    // Seek to where we left off
+    FileSeek(fileHandle, g_lastFileSize, SEEK_SET);
+    
+    // Read only new lines
+    int newSignalsCount = 0;
+    int newLinesRead = 0;
+    
+    while(!FileIsEnding(fileHandle))
+    {
+        string line = FileReadString(fileHandle);
+        if(FileIsEnding(fileHandle) && StringLen(line) == 0)
+            break;
+        
+        newLinesRead++;
+        StringTrimLeft(line);
+        StringTrimRight(line);
+        
+        // Skip empty lines and comments
+        if(StringLen(line) == 0 || StringFind(line, "#") == 0)
             continue;
-         
-         // Process NEW signals only
-         if(StringFind(line, "|NEW") > 0)
-         {
-            if(PrintToExpertLog)
-               Print("🆕 Processing new signal line: ", line);
-            
-            ProcessFormattedSignalLine(line);
-         }
-      }
-      
-      g_lastLineCount = totalLines;
-   }
-   else if(PrintToExpertLog)
-   {
-      Print("📄 File changed but no new signal lines found");
-   }
+        
+        // Process NEW signals
+        if(StringFind(line, "|NEW") > 0)
+        {
+            newSignalsCount++;
+            ProcessFormattedSignalLineFixed(line);
+        }
+    }
+    
+    // Update our position
+    g_lastFileSize = currentFileSize;
+    
+    FileClose(fileHandle);
+    
+    if(PrintToExpertLog && newSignalsCount > 0)
+    {
+        Print("✅ Found ", newSignalsCount, " NEW signals in ", newLinesRead, " new lines");
+    }
 }
 
 bool IsFileBeingWritten(string filepath)
