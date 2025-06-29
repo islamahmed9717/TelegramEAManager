@@ -511,14 +511,15 @@ namespace TelegramEAManager
         {
             try
             {
-                // Debounce - wait for file write to complete
+                // FIXED: Debounce with proper async
                 await Task.Delay(200);
 
-                // Process file change in background
+                // FIXED: Process in background to avoid UI blocking
                 await Task.Run(() =>
                 {
                     try
                     {
+                        // FIXED: Safe UI thread invoke
                         if (this.InvokeRequired)
                         {
                             this.BeginInvoke(new Action(() => {
@@ -534,13 +535,13 @@ namespace TelegramEAManager
                     }
                     catch (Exception ex)
                     {
-                        LogMessage($"❌ Error processing file change: {ex.Message}");
+                        Console.WriteLine($"File monitoring error: {ex.Message}");
                     }
                 });
             }
             catch (Exception ex)
             {
-                LogMessage($"❌ Error monitoring file: {ex.Message}");
+                Console.WriteLine($"❌ Error monitoring file: {ex.Message}");
             }
         }
         private void StopSignalFileMonitoring()
@@ -661,36 +662,80 @@ namespace TelegramEAManager
         {
             try
             {
-                // Process the message in a background task to avoid blocking
-                await Task.Run(() =>
+                // FIXED: Process in background thread to avoid UI blocking
+                await Task.Run(async () =>
                 {
-                    var processedSignal = signalProcessor.ProcessTelegramMessage(e.message, e.channelId, e.channelName);
-
-                    // Only add non-duplicate signals
-                    if (!processedSignal.Status.Contains("Duplicate"))
+                    try
                     {
-                        // Add to signals list
-                        lock (allSignals)
+                        var processedSignal = signalProcessor.ProcessTelegramMessage(e.message, e.channelId, e.channelName);
+
+                        // FIXED: Update UI safely
+                        if (this.InvokeRequired)
                         {
-                            allSignals.Add(processedSignal);
-                            // Keep only last 1000 signals
-                            if (allSignals.Count > 1000)
-                            {
-                                allSignals.RemoveRange(0, allSignals.Count - 1000);
-                            }
+                            this.BeginInvoke(new Action(() => {
+                                UpdateUIAfterSignal(processedSignal, e.channelId, e.channelName);
+                            }));
                         }
-
-                        // Update UI
-                        AddToLiveSignals(processedSignal);
-
-                        // Log the signal
-                        LogMessage($"📨 New signal from {e.channelName}: {processedSignal.ParsedData?.Symbol} {processedSignal.ParsedData?.Direction} - {processedSignal.Status}");
+                        else
+                        {
+                            UpdateUIAfterSignal(processedSignal, e.channelId, e.channelName);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        // FIXED: Safe error logging
+                        if (this.InvokeRequired)
+                        {
+                            this.BeginInvoke(new Action(() => LogMessage($"❌ Error processing message: {ex.Message}")));
+                        }
+                        else
+                        {
+                            LogMessage($"❌ Error processing message: {ex.Message}");
+                        }
                     }
                 });
             }
             catch (Exception ex)
             {
-                LogMessage($"❌ Error processing message: {ex.Message}");
+                LogMessage($"❌ Critical error in message handler: {ex.Message}");
+            }
+        }
+
+        private void UpdateUIAfterSignal(ProcessedSignal processedSignal, long channelId, string channelName)
+        {
+            try
+            {
+                // Only add non-duplicate signals
+                if (!processedSignal.Status.Contains("Duplicate"))
+                {
+                    // Add to signals list thread-safely
+                    lock (allSignals)
+                    {
+                        allSignals.Add(processedSignal);
+                        if (allSignals.Count > 1000)
+                        {
+                            allSignals.RemoveRange(0, allSignals.Count - 1000);
+                        }
+                    }
+
+                    // Update UI components
+                    AddToLiveSignals(processedSignal);
+                    UpdateSelectedChannelSignalCount(channelId);
+                    UpdateSignalsCount();
+
+                    // Log the signal
+                    LogMessage($"📨 New signal from {channelName}: {processedSignal.ParsedData?.Symbol} {processedSignal.ParsedData?.Direction} - {processedSignal.Status}");
+
+                    // Show notification for processed signals
+                    if (processedSignal.Status.Contains("Processed"))
+                    {
+                        ShowNotification($"📊 New Signal: {processedSignal.ParsedData?.Symbol} {processedSignal.ParsedData?.Direction}");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                LogMessage($"❌ UI update error: {ex.Message}");
             }
         }
         private void UpdateAfterNewSignal(ProcessedSignal processedSignal, long channelId)
@@ -2431,39 +2476,66 @@ TP 149.50"
 
         private void UiUpdateTimer_Tick(object? sender, EventArgs e)
         {
-            // Update time in subtitle showing both UTC and local
-            var lblSubtitle = this.Controls.Find("lblSubtitle", true).FirstOrDefault() as Label;
-            if (lblSubtitle != null)
+            try
             {
-                var utcTime = DateTime.UtcNow;
-                var localTime = DateTime.Now;
-                lblSubtitle.Text = $"🕒 UTC: {utcTime:yyyy-MM-dd HH:mm:ss} | Local: {localTime:HH:mm:ss} | User: islamahmed9717";
-            }
-
-            // Update time in status bar
-            foreach (Control control in this.Controls)
-            {
-                if (control is StatusStrip statusStrip)
+                // FIXED: Prevent timer accumulation
+                var timer = sender as System.Windows.Forms.Timer;
+                if (timer != null)
                 {
-                    foreach (ToolStripItem item in statusStrip.Items)
+                    timer.Stop(); // Stop timer during processing
+                }
+
+                // Quick UI updates only
+                UpdateTimeDisplays();
+                UpdateSignalsCount();
+
+                // FIXED: Restart timer after processing
+                if (timer != null)
+                {
+                    timer.Start();
+                }
+            }
+            catch (Exception ex)
+            {
+                LogMessage($"❌ Timer error: {ex.Message}");
+            }
+        }
+        private void UpdateTimeDisplays()
+        {
+            try
+            {
+                var lblSubtitle = this.Controls.Find("lblSubtitle", true).FirstOrDefault() as Label;
+                if (lblSubtitle != null)
+                {
+                    // FIXED: Show both local and UTC time for clarity
+                    var localTime = DateTime.Now;
+                    var utcTime = DateTime.UtcNow;
+                    lblSubtitle.Text = $"🕒 Local: {localTime:yyyy-MM-dd HH:mm:ss} | UTC: {utcTime:HH:mm:ss} | User: islamahmed9717";
+                }
+
+                // Update status bar with local time
+                foreach (Control control in this.Controls)
+                {
+                    if (control is StatusStrip statusStrip)
                     {
-                        if (item.Name == "statusLabel")
+                        foreach (ToolStripItem item in statusStrip.Items)
                         {
-                            item.Text = $"Real-time System Active | UTC: {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss} | Local: {DateTime.Now:HH:mm:ss}";
+                            if (item.Name == "statusLabel")
+                            {
+                                item.Text = $"Real-time System Active | Local: {DateTime.Now:yyyy-MM-dd HH:mm:ss}";
+                                break;
+                            }
                         }
+                        break;
                     }
                 }
             }
-
-            // Update signals count
-            UpdateSignalsCount();
-
-            // Update selected channels if monitoring
-            if (isMonitoring)
+            catch (Exception ex)
             {
-                UpdateSelectedChannelsSignalCounts();
+                Console.WriteLine($"Display update error: {ex.Message}");
             }
         }
+
         private void ClearOldSignalsFromFile()
         {
             var txtMT4Path = this.Controls.Find("txtMT4Path", true)[0] as TextBox;
