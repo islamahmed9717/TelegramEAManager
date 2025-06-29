@@ -1103,56 +1103,99 @@ bool ProcessFormattedSignalLineFixed(string line)
         return false;
     }
     
-    // Check signal status
+    // Check signal status first
     string signalStatus = parts[10];
     StringTrimLeft(signalStatus);
     StringTrimRight(signalStatus);
     
     if(signalStatus != "NEW")
-        return false;
-    
-    // Generate unique signal ID
-    string uniqueKey = parts[0] + "_" + parts[1] + "_" + parts[4] + "_" + parts[3] + "_" + GetTickCount();
-    string signalId = GenerateSignalId(uniqueKey);
-    
-    // Check if already processed
-    if(IsSignalAlreadyProcessedFixed(signalId))
     {
-        return false;
+        return false; // Skip processed signals
     }
-    
-    if(PrintToExpertLog)
-        Print("🆕 Processing NEW signal, ID: ", signalId);
-    
-    // Create signal object
-    TelegramSignal signal;
-    signal.signalId = signalId;
-    signal.receivedTime = TimeCurrent();
     
     // Parse timestamp
     string timestampStr = parts[0];
     StringTrimLeft(timestampStr);
     StringTrimRight(timestampStr);
-    signal.signalTime = ParseTimestamp(timestampStr);
+    datetime signalTime = ParseTimestamp(timestampStr);
     
-    if(signal.signalTime == 0)
-        signal.signalTime = TimeCurrent();
+    // FIXED: Use TimeCurrent() which is server time
+    datetime currentServerTime = TimeCurrent();
     
-    // Check signal age
-    long signalAgeMinutes = (TimeCurrent() - signal.signalTime) / 60;
+    if(PrintToExpertLog)
+    {
+        Print("📊 TIMESTAMP ANALYSIS:");
+        Print("   Signal Time: ", TimeToString(signalTime, TIME_DATE|TIME_SECONDS));
+        Print("   Server Time: ", TimeToString(currentServerTime, TIME_DATE|TIME_SECONDS));
+        Print("   Time Zone: ", TimeToString(currentServerTime, TIME_DATE|TIME_SECONDS), " (Server)");
+    }
     
+    // Calculate age in minutes
+    long signalAgeSeconds = currentServerTime - signalTime;
+    long signalAgeMinutes = signalAgeSeconds / 60;
+    
+    if(PrintToExpertLog)
+    {
+        Print("⏰ Age calculation:");
+        Print("   Age in seconds: ", signalAgeSeconds);
+        Print("   Age in minutes: ", signalAgeMinutes);
+        Print("   Max allowed minutes: ", MaxSignalAgeMinutes);
+    }
+    
+    // Handle negative age (signal from future - likely timezone issue)
+    if(signalAgeMinutes < 0)
+    {
+        if(PrintToExpertLog)
+        {
+            Print("⚠️ NEGATIVE AGE DETECTED!");
+            Print("   This usually means timezone mismatch between EA and signal source");
+            Print("   Signal appears to be from the future by ", MathAbs(signalAgeMinutes), " minutes");
+            Print("   Treating as FRESH signal (age = 0)");
+        }
+        signalAgeMinutes = 0; // Treat as fresh
+    }
+    
+    // Check if signal is expired
     if(signalAgeMinutes > MaxSignalAgeMinutes)
     {
         if(PrintToExpertLog)
-            Print("⏰ Signal expired: ", (int)signalAgeMinutes, " minutes old");
+        {
+            Print("⏰ SIGNAL EXPIRED:");
+            Print("   Signal age: ", signalAgeMinutes, " minutes");
+            Print("   Maximum allowed: ", MaxSignalAgeMinutes, " minutes");
+            Print("   Difference: ", (signalAgeMinutes - MaxSignalAgeMinutes), " minutes over limit");
+        }
         
         totalExpiredSignals++;
-        AddToProcessedSignals(signal.signalId);
-        UpdateSignalStatusInFile(line, "EXPIRED");
-        return true;
+        MarkSignalAsProcessedInFileFixed(line); // Mark as processed to avoid re-checking
+        return false;
     }
     
-    // Parse signal data
+    // Generate unique signal ID
+    string uniqueKey = parts[0] + "_" + parts[1] + "_" + parts[4] + "_" + parts[3];
+    string signalId = GenerateSignalId(uniqueKey);
+    
+    // Check if already processed
+    if(IsSignalAlreadyProcessedFixed(signalId))
+    {
+        if(PrintToExpertLog)
+            Print("⏭️ Signal already processed (ID: ", signalId, ")");
+        return false;
+    }
+    
+    if(PrintToExpertLog)
+    {
+        Print("🆕 PROCESSING FRESH SIGNAL:");
+        Print("   Signal ID: ", signalId);
+        Print("   Age: ", signalAgeMinutes, " minutes");
+        Print("   Status: VALID & FRESH");
+    }
+    
+    // Create signal object
+    TelegramSignal signal;
+    signal.signalId = signalId;
+    signal.signalTime = signalTime;
+    signal.receivedTime = currentServerTime;
     signal.channelId = StringToInteger(parts[1]);
     signal.channelName = parts[2];
     signal.direction = parts[3];
@@ -1171,11 +1214,11 @@ bool ProcessFormattedSignalLineFixed(string line)
     if(ValidateSignal(signal))
     {
         if(PrintToExpertLog)
-            Print("✅ Signal validation passed, executing...");
+            Print("✅ Signal validation passed, executing trades...");
             
         ProcessValidatedSignal(signal);
         AddToProcessedSignals(signal.signalId);
-        UpdateSignalStatusInFile(line, "PROCESSED");
+        MarkSignalAsProcessedInFileFixed(line);
         
         return true;
     }
@@ -1183,8 +1226,9 @@ bool ProcessFormattedSignalLineFixed(string line)
     {
         if(PrintToExpertLog)
             Print("❌ Signal validation failed");
-        AddToProcessedSignals(signal.signalId);
-        UpdateSignalStatusInFile(line, "INVALID");
+        
+        AddToProcessedSignals(signal.signalId); // Still mark as processed to avoid re-checking
+        MarkSignalAsProcessedInFileFixed(line);
         return false;
     }
 }
@@ -1664,35 +1708,46 @@ datetime ParseTimestamp(string timestampStr)
 {
     datetime result = 0;
     
-    // Remove any extra spaces
     StringTrimLeft(timestampStr);
     StringTrimRight(timestampStr);
     
-    // Format 1: YYYY.MM.DD HH:MM:SS (MT5 standard)
+    Print("🔍 Parsing timestamp: '", timestampStr, "'");
+    
+    // Try direct parsing first (handles yyyy.MM.dd HH:mm:ss format)
     if(StringLen(timestampStr) >= 19)
     {
         result = StringToTime(timestampStr);
         if(result > 0)
+        {
+            Print("✅ Direct parsing successful: ", timestampStr, " -> ", TimeToString(result, TIME_DATE|TIME_SECONDS));
             return result;
+        }
     }
     
-    // Format 2: YYYY-MM-DD HH:MM:SS (ISO format from C#)
-    StringReplace(timestampStr, "-", ".");
-    result = StringToTime(timestampStr);
+    // Try ISO format conversion (yyyy-MM-dd HH:mm:ss -> yyyy.MM.dd HH:mm:ss)
+    string normalizedTime = timestampStr;
+    StringReplace(normalizedTime, "-", ".");
+    result = StringToTime(normalizedTime);
     if(result > 0)
-        return result;
-    
-    // Format 3: Unix timestamp
-    long unixTime = StringToInteger(timestampStr);
-    if(unixTime > 1000000000 && unixTime < 2000000000) // Valid unix timestamp range
     {
-        return (datetime)unixTime;
+        Print("✅ ISO format parsing successful: ", timestampStr, " -> ", TimeToString(result, TIME_DATE|TIME_SECONDS));
+        return result;
     }
     
-    // If all parsing failed, use current time
-    Print("⚠️ MT5 Could not parse timestamp: ", timestampStr, " - using current time");
+    // Handle Unix timestamp
+    long unixTime = StringToInteger(timestampStr);
+    if(unixTime > 1000000000 && unixTime < 2000000000)
+    {
+        result = (datetime)unixTime;
+        Print("✅ Unix timestamp parsing successful: ", timestampStr, " -> ", TimeToString(result, TIME_DATE|TIME_SECONDS));
+        return result;
+    }
+    
+    // If all failed, use current server time
+    Print("❌ Timestamp parsing failed for: '", timestampStr, "' - using current server time");
     return TimeCurrent();
 }
+
 
 //+------------------------------------------------------------------+
 //| Check if signal was already processed                           |
@@ -1853,65 +1908,95 @@ void LoadProcessedSignalIds()
 //+------------------------------------------------------------------+
 bool ValidateSignal(TelegramSignal &signal)
 {
+    if(PrintToExpertLog)
+    {
+        Print("🔍 VALIDATING SIGNAL:");
+        Print("   Original Symbol: ", signal.originalSymbol);
+        Print("   Final Symbol: ", signal.finalSymbol);
+        Print("   Direction: ", signal.direction);
+        Print("   Channel ID: ", signal.channelId);
+    }
+    
     // Basic validation
     if(StringLen(signal.originalSymbol) == 0)
     {
         if(PrintToExpertLog)
-            Print("❌ Invalid signal: Missing symbol");
+            Print("❌ Validation failed: Missing symbol");
         return false;
     }
     
     if(StringLen(signal.direction) == 0)
     {
         if(PrintToExpertLog)
-            Print("❌ Invalid signal: Missing direction");
+            Print("❌ Validation failed: Missing direction");
         return false;
     }
     
-    // Validate direction
     if(signal.direction != "BUY" && signal.direction != "SELL")
     {
         if(PrintToExpertLog)
-            Print("❌ Invalid signal: Invalid direction: ", signal.direction);
+            Print("❌ Validation failed: Invalid direction: ", signal.direction);
         return false;
     }
     
     if(StringLen(signal.finalSymbol) == 0)
     {
         if(PrintToExpertLog)
-            Print("🚫 Signal filtered: ", signal.originalSymbol, " (excluded by symbol filters)");
+            Print("❌ Validation failed: Symbol excluded by filters");
         totalSymbolsFiltered++;
         return false;
     }
     
-    // Check if channel is monitored (if ChannelIDs parameter is set)
-    if(StringLen(ChannelIDs) > 0 && !IsChannelMonitored(IntegerToString(signal.channelId)))
+    // FIXED: Channel validation with test channel support
+    if(StringLen(ChannelIDs) > 0)
+    {
+        string channelIdStr = IntegerToString(signal.channelId);
+        
+        // Allow test channel 999999
+        if(signal.channelId == 999999)
+        {
+            if(PrintToExpertLog)
+                Print("✅ Test channel detected (999999) - signal allowed");
+        }
+        else if(!IsChannelMonitored(channelIdStr))
+        {
+            if(PrintToExpertLog)
+            {
+                Print("❌ Validation failed: Channel not monitored");
+                Print("   Channel ID: ", signal.channelId);
+                Print("   Monitored channels: ", ChannelIDs);
+                Print("   💡 Add channel ID to ChannelIDs parameter or use test channel 999999");
+            }
+            return false;
+        }
+    }
+    else
     {
         if(PrintToExpertLog)
-            Print("⏭️ Skipping signal from unmonitored channel: ", signal.channelId);
-        return false;
+            Print("⚠️ No channel filter set - accepting all channels");
     }
     
-    // Validate price levels
+    // Price level validation
     if(signal.stopLoss <= 0 && IgnoreTradesWithoutSL)
     {
         if(PrintToExpertLog)
-            Print("⚠️ Ignoring signal without SL: ", signal.finalSymbol);
+            Print("❌ Validation failed: No stop loss and IgnoreTradesWithoutSL = true");
         return false;
     }
     
     if(signal.takeProfit1 <= 0 && IgnoreTradesWithoutTP)
     {
         if(PrintToExpertLog)
-            Print("⚠️ Ignoring signal without TP: ", signal.finalSymbol);
+            Print("❌ Validation failed: No take profit and IgnoreTradesWithoutTP = true");
         return false;
     }
     
     if(PrintToExpertLog)
-        Print("✅ Signal validation successful for: ", signal.finalSymbol);
+        Print("✅ SIGNAL VALIDATION SUCCESSFUL");
     
     return true;
 }
+
 void LogFileError(string operation, string filename, int errorCode)
 {
    Print("❌ MT5 File operation failed:");
@@ -3216,88 +3301,49 @@ bool IsTimeToTrade()
 //+------------------------------------------------------------------+
 void UpdateComment()
 {
-   string comment = "📱 TELEGRAM EA MANAGER - COMPLETE MT5 v2.17\n";
-   comment += "════════════════════════════════════════════\n";
-   comment += "👤 Developer: islamahmed9717\n";
-   comment += "📅 Version: 2.17 MT5 (FIXED FILE ACCESS)\n";
-   comment += "🔗 GitHub: https://github.com/islamahmed9717\n";
-   comment += "🎯 Platform: MetaTrader 5\n";
-   comment += "⏰ Signal Expiry: " + IntegerToString(MaxSignalAgeMinutes) + " minutes\n";
-   comment += "📁 Signal File: telegram_signals.txt\n";
-   comment += "════════════════════════════════════════════\n";
-   comment += "📊 REAL-TIME STATISTICS:\n";
-   comment += "• Signals Processed: " + IntegerToString(totalSignalsProcessed) + "\n";
-   comment += "• Trades Executed: " + IntegerToString(totalTradesExecuted) + "\n";
-   comment += "• Expired Signals: " + IntegerToString(totalExpiredSignals) + " ⏰\n";
-   comment += "• Symbols Filtered: " + IntegerToString(totalSymbolsFiltered) + "\n";
-   comment += "• Open Positions: " + IntegerToString(openTradesCount) + "\n";
-   comment += "• Processed IDs: " + IntegerToString(processedSignalCount) + "\n";
-   comment += "• Magic Number: " + IntegerToString(magicNumber) + "\n";
-   comment += "• Current UTC: " + TimeToString(TimeCurrent(), TIME_DATE|TIME_MINUTES) + "\n";
-   comment += "════════════════════════════════════════════\n";
-   
-   // File access status
-   bool fileExists = (FileOpen("telegram_signals.txt", FILE_READ|FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_TXT|FILE_ANSI) != INVALID_HANDLE);
-   if(fileExists)
-   {
-      FileClose(FileOpen("telegram_signals.txt", FILE_READ|FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_TXT|FILE_ANSI));
-      comment += "📁 FILE STATUS: ✅ ACCESSIBLE\n";
-   }
-   else
-   {
-      comment += "📁 FILE STATUS: ❌ NOT FOUND\n";
-      comment += "💡 Check Windows app MT4 path setting\n";
-   }
-   
-   if(StringLen(ChannelIDs) == 0)
-   {
-      comment += "⚠️ NO CHANNEL IDs CONFIGURED!\n";
-      comment += "📱 Use Windows app to get Channel IDs\n";
-      comment += "🔧 Steps:\n";
-      comment += "  1. Run Telegram EA Manager app\n";
-      comment += "  2. Connect to Telegram\n";
-      comment += "  3. Select channels to monitor\n";
-      comment += "  4. Copy Channel IDs\n";
-      comment += "  5. Paste in EA ChannelIDs parameter\n";
-   }
-   else
-   {
-      comment += "📡 MONITORING CHANNELS:\n";
-      string channelDisplay = ChannelIDs;
-      if(StringLen(channelDisplay) > 40)
-         channelDisplay = StringSubstr(channelDisplay, 0, 37) + "...";
-      comment += "• " + channelDisplay + "\n";
-      
-      string channels[];
-      int channelCount = StringSplit(ChannelIDs, ',', channels);
-      comment += "💡 " + IntegerToString(channelCount) + " channel(s) monitored\n";
-   }
-   
-   comment += "════════════════════════════════════════════\n";
-   comment += "⏰ SIGNAL EXPIRY PROTECTION:\n";
-   comment += "• Max Age: " + IntegerToString(MaxSignalAgeMinutes) + " minutes\n";
-   comment += "• Expired Today: " + IntegerToString(totalExpiredSignals) + "\n";
-   comment += "• Status: " + (MaxSignalAgeMinutes <= 10 ? "STRICT ✅" : "RELAXED ⚠️") + "\n";
-   comment += "════════════════════════════════════════════\n";
-   
-   // Enhanced status indicators
-   string systemStatus = "WAITING 🟡";
-   if(totalSignalsProcessed > 0 && totalTradesExecuted > 0)
-      systemStatus = "ACTIVE & TRADING ✅";
-   else if(totalSignalsProcessed > 0)
-      systemStatus = "PROCESSING SIGNALS 🔄";
-   else if(totalExpiredSignals > 0)
-      systemStatus = "SIGNALS EXPIRED ⏰";
-   else if(!fileExists)
-      systemStatus = "FILE NOT FOUND ❌";
-   
-   comment += "🎯 MT5 SYSTEM STATUS: " + systemStatus + "\n";
-   comment += "📱 Keep Windows app running for signals!\n";
-   comment += "⏰ Signal freshness guaranteed: " + IntegerToString(MaxSignalAgeMinutes) + " min max\n";
-   comment += "🕐 Last updated: " + TimeToString(TimeCurrent(), TIME_MINUTES) + " (Server)\n";
-   comment += "👤 Current user: islamahmed9717\n";
-   
-   Comment(comment);
+    string comment = "📱 TELEGRAM EA MANAGER - COMPLETE MT5 v2.17\n";
+    comment += "════════════════════════════════════════════\n";
+    comment += "👤 Developer: islamahmed9717\n";
+    comment += "📅 Version: 2.17 MT5 (TIMEZONE FIXED)\n";
+    comment += "🔗 GitHub: https://github.com/islamahmed9717\n";
+    comment += "🎯 Platform: MetaTrader 5\n";
+    comment += "⏰ Signal Expiry: " + IntegerToString(MaxSignalAgeMinutes) + " minutes\n";
+    comment += "📁 Signal File: telegram_signals.txt\n";
+    comment += "════════════════════════════════════════════\n";
+    comment += "📊 REAL-TIME STATISTICS:\n";
+    comment += "• Signals Processed: " + IntegerToString(totalSignalsProcessed) + "\n";
+    comment += "• Trades Executed: " + IntegerToString(totalTradesExecuted) + "\n";
+    comment += "• Expired Signals: " + IntegerToString(totalExpiredSignals) + " ⏰\n";
+    comment += "• Symbols Filtered: " + IntegerToString(totalSymbolsFiltered) + "\n";
+    comment += "• Open Positions: " + IntegerToString(openTradesCount) + "\n";
+    comment += "• Processed IDs: " + IntegerToString(processedSignalCount) + "\n";
+    comment += "• Magic Number: " + IntegerToString(magicNumber) + "\n";
+    comment += "• Server Time: " + TimeToString(TimeCurrent(), TIME_DATE|TIME_MINUTES) + "\n";
+    comment += "════════════════════════════════════════════\n";
+    
+    // Enhanced timezone info
+    comment += "🕐 TIMEZONE INFO:\n";
+    comment += "• Server Time: " + TimeToString(TimeCurrent(), TIME_DATE|TIME_SECONDS) + "\n";
+    comment += "• Timezone: Server timezone (MT5 broker time)\n";
+    comment += "• Signal Source: Should match server timezone\n";
+    comment += "════════════════════════════════════════════\n";
+    
+    // Status
+    string systemStatus = "WAITING 🟡";
+    if(totalSignalsProcessed > 0 && totalTradesExecuted > 0)
+        systemStatus = "ACTIVE & TRADING ✅";
+    else if(totalSignalsProcessed > 0)
+        systemStatus = "PROCESSING SIGNALS 🔄";
+    else if(totalExpiredSignals > 0)
+        systemStatus = "SIGNALS EXPIRED ⏰";
+    
+    comment += "🎯 MT5 SYSTEM STATUS: " + systemStatus + "\n";
+    comment += "📱 Keep Windows app running for signals!\n";
+    comment += "⏰ Signal freshness: " + IntegerToString(MaxSignalAgeMinutes) + " min max\n";
+    comment += "🕐 Current server time: " + TimeToString(TimeCurrent(), TIME_DATE|TIME_SECONDS) + "\n";
+    comment += "👤 User: islamahmed9717\n";
+    
+    Comment(comment);
 }
 //+------------------------------------------------------------------+
 //| Performance Monitoring Function                                 |
