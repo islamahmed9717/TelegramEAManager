@@ -185,26 +185,80 @@ struct TelegramSignal
    bool isExpired;
    bool isProcessed;
 };
+struct LicenseInfo
+{
+    long account;
+    int expiry_year;
+    int expiry_month;
+    int expiry_day;
+    string customer_name;
+};
 
 //+------------------------------------------------------------------+
 //| Expert initialization function                                   |
 //+------------------------------------------------------------------+
 int OnInit()
 {
+    // LICENSE CHECK - MUST BE FIRST!
+    Print("═══════════════════════════════════════════");
+    Print("🔐 CHECKING EA LICENSE...");
+    Print("═══════════════════════════════════════════");
+    
+    if(!IsLicensed())
+    {
+        string account = IntegerToString(AccountInfoInteger(ACCOUNT_LOGIN));
+        string broker = AccountInfoString(ACCOUNT_COMPANY);
+        
+        Alert("❌ EA NOT LICENSED for account: " + account);
+        Print("❌ LICENSE CHECK FAILED for account: ", account);
+        Print("❌ Broker: ", broker);
+        
+        Comment("❌ UNLICENSED EA\n" +
+                "🔢 Your Account: " + account + "\n" +
+                "🏦 Your Broker: " + broker + "\n" +
+                "📧 Contact: islamahmed9717@gmail.com\n" +
+                "💰 License Price: $200 (6 months)\n" +
+                "💎 Lifetime Price: $500\n" +
+                "⏰ Instant activation!\n" +
+                "🚀 Professional EA with support\n" +
+                "💬 WhatsApp: +1234567890\n" +
+                "🎯 Get licensed now!");
+        
+        return(INIT_FAILED); // Stop EA completely
+    }
+    
+    // LICENSE VALID - Show success
+    string account = IntegerToString(AccountInfoInteger(ACCOUNT_LOGIN));
+    string broker = AccountInfoString(ACCOUNT_COMPANY);
+    string server = AccountInfoString(ACCOUNT_SERVER);
+    
+    Print("✅ EA LICENSE VALID for account: ", account);
+    Print("✅ Broker: ", broker);
+    Print("✅ Server: ", server);
+    
+    Comment("✅ EA LICENSED & ACTIVE\n" +
+            "👤 Account: " + account + "\n" +
+            "🏦 Broker: " + broker + "\n" +
+            "🖥️ Server: " + server + "\n" +
+            "📅 Time: " + TimeToString(TimeCurrent(), TIME_DATE|TIME_MINUTES) + "\n" +
+            "🚀 Status: Running\n" +
+            "👨‍💻 Developer: islamahmed9717\n" +
+            "📊 Version: Commercial v3.0");
+    
+    Print("✅ License check passed - EA starting...");
+    Print("═══════════════════════════════════════════");
+    
+    // ===== ADD YOUR ORIGINAL EA INITIALIZATION CODE BELOW =====
+    
     // Initialize broker-specific symbol mapping
-    Print("═══════════════════════════════════════════");
     Print("🏦 INITIALIZING BROKER MAPPING");
-    Print("═══════════════════════════════════════════");
     InitializeSymbolMappings();
     
-    Print("=================================================================");
-    Print("🚀 TELEGRAM EA MANAGER - CONTINUOUS MONITORING VERSION");
-    Print("=================================================================");
+    Print("🚀 TELEGRAM EA MANAGER - LICENSED VERSION");
     Print("👤 Developer: islamahmed9717");
-    Print("📅 Version: 3.00 MT5 - FIXED CONTINUOUS MONITORING");
+    Print("📅 Version: 3.00 MT5 - COMMERCIAL LICENSED");
     Print("⏰ Signal Expiry: ", MaxSignalAgeMinutes, " minutes");
     Print("🔄 Check Interval: ", SignalCheckInterval, " seconds");
-    Print("=================================================================");
     
     // Validate and fix check interval
     int fixedInterval = MathMax(1, MathMin(10, SignalCheckInterval));
@@ -258,17 +312,15 @@ int OnInit()
         return(INIT_FAILED);
     }
     
-    Print("✅ MT5 EA initialized successfully!");
+    Print("✅ Licensed MT5 EA initialized successfully!");
     Print("🔄 Continuous monitoring active - checking every ", fixedInterval, " seconds");
     Print("📁 Monitoring file: ", SignalFilePath);
     
     // Initialize monitoring state
     g_ContinuousMonitoring = true;
-    g_lastFileCheck = 0;  // Force immediate check
+    g_lastFileCheck = 0;
     
     UpdateComment();
-  
-
     
     return(INIT_SUCCEEDED);
 }
@@ -278,36 +330,41 @@ int OnInit()
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason)
 {
-   EventKillTimer();
-   
-   Print("=================================================================");
-   Print("⏹️ TELEGRAM EA MT5 STOPPED");
-   Print("=================================================================");
-   Print("📊 Session Statistics:");
-   Print("   • Signals Processed: ", totalSignalsProcessed);
-   Print("   • Trades Executed: ", totalTradesExecuted);
-   Print("   • Expired Signals: ", totalExpiredSignals);
-   Print("   • Symbols Filtered: ", totalSymbolsFiltered);
-   Print("   • Open Positions: ", openTradesCount);
-   Print("📅 Stop Time: ", TimeToString(TimeCurrent(), TIME_DATE|TIME_MINUTES), " (Server Time)");
-   Print("👤 Developer: islamahmed9717");
-   Print("=================================================================");
-   
-   string reasonText = "";
-   switch(reason)
-   {
-      case REASON_PROGRAM: reasonText = "EA removed from chart"; break;
-      case REASON_REMOVE: reasonText = "EA removed manually"; break;
-      case REASON_RECOMPILE: reasonText = "EA recompiled"; break;
-      case REASON_CHARTCHANGE: reasonText = "Chart symbol/period changed"; break;
-      case REASON_CHARTCLOSE: reasonText = "Chart closed"; break;
-      case REASON_PARAMETERS: reasonText = "Input parameters changed"; break;
-      case REASON_ACCOUNT: reasonText = "Account changed"; break;
-      default: reasonText = "Unknown reason (" + IntegerToString(reason) + ")"; break;
-   }
-   
-   Print("🔍 Stop Reason: ", reasonText);
-   Comment("");
+    EventKillTimer();
+    
+    Print("═══════════════════════════════════════════");
+    Print("⏹️ LICENSED TELEGRAM EA MT5 STOPPED");
+    Print("═══════════════════════════════════════════");
+    Print("📊 Session Statistics:");
+    Print("   • Licensed Account: ", AccountInfoInteger(ACCOUNT_LOGIN));
+    Print("   • Broker: ", AccountInfoString(ACCOUNT_COMPANY));
+    Print("   • Signals Processed: ", totalSignalsProcessed);
+    Print("   • Trades Executed: ", totalTradesExecuted);
+    Print("   • Expired Signals: ", totalExpiredSignals);
+    Print("   • Symbols Filtered: ", totalSymbolsFiltered);
+    Print("   • Open Positions: ", openTradesCount);
+    Print("📅 Stop Time: ", TimeToString(TimeCurrent(), TIME_DATE|TIME_MINUTES));
+    Print("👤 Developer: islamahmed9717 | Licensed Version");
+    Print("═══════════════════════════════════════════");
+    
+    string reasonText = "";
+    switch(reason)
+    {
+        case REASON_PROGRAM: reasonText = "EA removed from chart"; break;
+        case REASON_REMOVE: reasonText = "EA removed manually"; break;
+        case REASON_RECOMPILE: reasonText = "EA recompiled"; break;
+        case REASON_CHARTCHANGE: reasonText = "Chart symbol/period changed"; break;
+        case REASON_CHARTCLOSE: reasonText = "Chart closed"; break;
+        case REASON_PARAMETERS: reasonText = "Input parameters changed"; break;
+        case REASON_ACCOUNT: reasonText = "Account changed"; break;
+        default: reasonText = "Unknown reason (" + IntegerToString(reason) + ")"; break;
+    }
+    
+    Print("🔍 Stop Reason: ", reasonText);
+    Comment("⏹️ EA STOPPED\n" +
+            "📊 Account: " + IntegerToString(AccountInfoInteger(ACCOUNT_LOGIN)) + "\n" +
+            "📅 Time: " + TimeToString(TimeCurrent(), TIME_DATE|TIME_MINUTES) + "\n" +
+            "👤 Licensed Version by islamahmed9717");
 }
 
 //+------------------------------------------------------------------+
@@ -343,6 +400,31 @@ void OnTick()
 //+------------------------------------------------------------------+
 void OnTimer()
 {
+    // HOURLY LICENSE CHECK
+    static datetime last_license_check = 0;
+    datetime current_time = TimeCurrent();
+    
+    if(current_time - last_license_check >= 3600) // Check every hour
+    {
+        if(!IsLicensed())
+        {
+            Print("⏰ HOURLY LICENSE CHECK: FAILED!");
+            Alert("❌ EA License expired or invalid! EA stopping...");
+            Comment("❌ LICENSE CHECK FAILED\n" +
+                    "⏰ EA stopped for security\n" +
+                    "📧 Contact: islamahmed9717@gmail.com\n" +
+                    "💰 Renew license to continue");
+            
+            ExpertRemove(); // Remove EA from chart
+            return;
+        }
+        
+        last_license_check = current_time;
+        Print("✅ Hourly license check: PASSED");
+    }
+    
+    // ===== ADD YOUR ORIGINAL OnTimer() CODE BELOW =====
+    
     // Check if monitoring is enabled
     if(!g_ContinuousMonitoring)
     {
@@ -350,7 +432,7 @@ void OnTimer()
         return;
     }
     
-    // Always check for new signals (no skipping)
+    // Always check for new signals
     CheckForNewSignals();
     
     // Update trailing stops if enabled
@@ -385,7 +467,7 @@ void OnTimer()
     static datetime lastStatusLog = 0;
     if(PrintToExpertLog && TimeCurrent() - lastStatusLog >= 60)
     {
-        Print("📊 Monitoring Active | Signals: ", totalSignalsProcessed, 
+        Print("📊 Licensed EA Active | Signals: ", totalSignalsProcessed, 
               " | Trades: ", totalTradesExecuted,
               " | Time: ", TimeToString(TimeCurrent(), TIME_SECONDS));
         lastStatusLog = TimeCurrent();
@@ -421,6 +503,90 @@ void InitializeSymbolMappings()
     
     // Show final mapping summary
     ShowMappingSummary();
+}
+
+bool IsLicensed()
+{
+    long account = AccountInfoInteger(ACCOUNT_LOGIN);
+    
+    // ===== ADD YOUR CUSTOMERS HERE =====
+    LicenseInfo customers[] = 
+    {
+        // {Account_Number, Year, Month, Day, "Customer_Name"}
+        {12345678, 2025, 12, 31, "John Smith"},        // Expires Dec 31, 2025
+        {87654321, 2025, 6, 15, "Mary Johnson"},       // Expires Jun 15, 2025
+        {11111111, 2025, 3, 1, "Demo Account"},        // Expires Mar 1, 2025
+        {22222222, 2026, 1, 1, "VIP Customer"},        // Expires Jan 1, 2026
+        {33333333, 2025, 8, 30, "Test User"},          // Expires Aug 30, 2025
+        {44444444, 2030, 12, 31, "Lifetime User"},     // Lifetime until 2030
+        {55555555, 2025, 7, 4, "July Customer"},       // Expires Jul 4, 2025
+        {66666666, 2025, 9, 15, "September User"},     // Expires Sep 15, 2025
+        {77777777, 2025, 11, 30, "November User"},     // Expires Nov 30, 2025
+        {88888888, 2026, 6, 1, "Premium Customer"},     // Expires Jun 1, 2026
+        {93484368, 2050,12,1, "The Owner"}
+    };
+    
+    int total_customers = ArraySize(customers);
+    
+    // Find customer account and check expiry
+    for(int i = 0; i < total_customers; i++)
+    {
+        if(customers[i].account == account)
+        {
+            // Found account - check if expired
+            datetime current_time = TimeCurrent();
+            datetime expiry_time = StringToTime(
+                IntegerToString(customers[i].expiry_year) + "." +
+                StringFormat("%02d", customers[i].expiry_month) + "." +
+                StringFormat("%02d", customers[i].expiry_day) + " 23:59:59"
+            );
+            
+            if(current_time <= expiry_time)
+            {
+                // Valid license
+                Print("✅ Licensed to: ", customers[i].customer_name);
+                Print("📅 Valid until: ", TimeToString(expiry_time, TIME_DATE));
+                
+                // Check for expiry warnings
+                int seconds_until_expiry = (int)(expiry_time - current_time);
+                int days_until_expiry = seconds_until_expiry / 86400;
+                
+                if(days_until_expiry <= 1)
+                {
+                    Alert("🚨 LICENSE EXPIRES TODAY! Contact islamahmed9717 to renew!");
+                }
+                else if(days_until_expiry <= 3)
+                {
+                    Alert("⚠️ License expires in " + IntegerToString(days_until_expiry) + " days! Renew now!");
+                }
+                else if(days_until_expiry <= 7)
+                {
+                    Print("📅 FYI: License expires in ", days_until_expiry, " days");
+                }
+                
+                return true; // License valid
+            }
+            else
+            {
+                // License expired
+                Print("⏰ License EXPIRED for: ", customers[i].customer_name);
+                Print("📅 Expired on: ", TimeToString(expiry_time, TIME_DATE));
+                
+                Alert("⏰ EA LICENSE EXPIRED on " + TimeToString(expiry_time, TIME_DATE));
+                Comment("⏰ LICENSE EXPIRED\n" +
+                        "👤 Customer: " + customers[i].customer_name + "\n" +
+                        "📅 Expired: " + TimeToString(expiry_time, TIME_DATE) + "\n" +
+                        "💰 Renew: Contact islamahmed9717\n" +
+                        "📧 Email: your_email@gmail.com\n" +
+                        "💵 Price: $200\n" +
+                        "🔢 Account: " + IntegerToString(account));
+                return false; // License expired
+            }
+        }
+    }
+    
+    // Account not found
+    return false;
 }
 
 

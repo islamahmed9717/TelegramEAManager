@@ -2064,10 +2064,17 @@ TP2: 1.0950";
                 // Stop file monitoring
                 StopSignalFileMonitoring();
 
-                // Stop Telegram monitoring
+                // Stop Telegram monitoring with proper cleanup
                 telegramService.StopMonitoring();
 
+                // Add a small delay to ensure cleanup
+                Thread.Sleep(100);
+
                 isMonitoring = false;
+
+                // Clear any cached data
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
 
                 // Update UI
                 var btnStart = this.Controls.Find("btnStartMonitoring", true)[0] as Button;
@@ -2076,11 +2083,10 @@ TP2: 1.0950";
                 if (btnStop != null) btnStop.Enabled = false;
 
                 UpdateStatus(telegramService.IsUserAuthorized(), false);
-
-                // Update selected channels to show "Ready" status
                 UpdateSelectedChannelsStatus("✅ Ready");
 
-                ShowMessage("⏹️ Monitoring stopped successfully!", "Monitoring Stopped", MessageBoxIcon.Information);
+                ShowMessage("⏹️ Monitoring stopped successfully!\n\nYou can restart monitoring at any time.",
+                           "Monitoring Stopped", MessageBoxIcon.Information);
             }
             catch (Exception ex)
             {

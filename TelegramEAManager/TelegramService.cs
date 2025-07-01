@@ -567,48 +567,63 @@ STEP 7: 📋 Copy the api_id (numbers) and api_hash (long string) below"
             {
                 OnDebugMessage($"Starting monitoring for {channels.Count} channels");
 
-                // Clear previous monitoring
+                // CRITICAL: Ensure we're in a clean state
                 StopMonitoring();
+
+                // Add a small delay to ensure cleanup is complete
+                Thread.Sleep(500);
 
                 // Set up monitored channels
                 monitoredChannels.Clear();
+                lastMessageIds.Clear(); // Ensure this is cleared
+
+                // Set monitoring flag early
+                isMonitoring = true;
 
                 // Initialize lastMessageIds asynchronously
                 Task.Run(async () =>
                 {
-                    foreach (var channel in channels)
+                    try
                     {
-                        monitoredChannels.Add(channel.Id);
+                        foreach (var channel in channels)
+                        {
+                            monitoredChannels.Add(channel.Id);
 
-                        // Get the latest message ID for this channel
-                        try
-                        {
-                            var latestMessageId = await GetLatestMessageId(channel.Id, channel.AccessHash);
-                            lastMessageIds[channel.Id] = latestMessageId;
-                            OnDebugMessage($"Initialized channel {channel.Title} with latest message ID: {latestMessageId}");
+                            // Get the latest message ID for this channel
+                            try
+                            {
+                                var latestMessageId = await GetLatestMessageId(channel.Id, channel.AccessHash);
+                                lastMessageIds[channel.Id] = latestMessageId;
+                                OnDebugMessage($"Initialized channel {channel.Title} with latest message ID: {latestMessageId}");
+                            }
+                            catch (Exception ex)
+                            {
+                                OnDebugMessage($"Failed to get latest message ID for {channel.Title}: {ex.Message}");
+                                lastMessageIds[channel.Id] = 0;
+                            }
                         }
-                        catch (Exception ex)
-                        {
-                            OnDebugMessage($"Failed to get latest message ID for {channel.Title}: {ex.Message}");
-                            lastMessageIds[channel.Id] = 0;
-                        }
+
+                        // Create a new timer instance
+                        messagePollingTimer = new System.Threading.Timer(
+                            async _ => await PollAllChannelsAsync(),
+                            null,
+                            TimeSpan.FromSeconds(5),
+                            TimeSpan.FromSeconds(2)
+                        );
+
+                        OnDebugMessage("Monitoring started successfully - will only process NEW messages from now");
                     }
-
-                    isMonitoring = true;
-
-                    // Start polling timer after initialization is complete
-                    messagePollingTimer = new System.Threading.Timer(
-                        async _ => await PollAllChannelsAsync(),
-                        null,
-                        TimeSpan.FromSeconds(5), // Start after 5 seconds to ensure proper initialization
-                        TimeSpan.FromSeconds(2)
-                    );
-
-                    OnDebugMessage("Monitoring started successfully - will only process NEW messages from now");
+                    catch (Exception ex)
+                    {
+                        isMonitoring = false; // Reset flag on error
+                        OnErrorOccurred($"Failed during monitoring initialization: {ex.Message}");
+                        OnDebugMessage($"Monitoring initialization error: {ex}");
+                    }
                 }).ContinueWith(task =>
                 {
                     if (task.IsFaulted)
                     {
+                        isMonitoring = false; // Reset flag on error
                         OnErrorOccurred($"Failed to start monitoring: {task.Exception?.GetBaseException().Message}");
                         OnDebugMessage($"Monitoring error: {task.Exception}");
                     }
@@ -616,6 +631,7 @@ STEP 7: 📋 Copy the api_id (numbers) and api_hash (long string) below"
             }
             catch (Exception ex)
             {
+                isMonitoring = false; // Reset flag on error
                 OnErrorOccurred($"Failed to start monitoring: {ex.Message}");
                 OnDebugMessage($"Monitoring error: {ex}");
             }
@@ -652,9 +668,29 @@ STEP 7: 📋 Copy the api_id (numbers) and api_hash (long string) below"
         /// </summary>
         public void StopMonitoring()
         {
-            messagePollingTimer?.Dispose();
-            messagePollingTimer = null;
-            monitoredChannels.Clear();
+            try
+            {
+                OnDebugMessage("Stopping monitoring...");
+
+                // Stop the timer first
+                messagePollingTimer?.Dispose();
+                messagePollingTimer = null;
+
+                // Clear monitoring state
+                isMonitoring = false;
+
+                // CRITICAL: Clear the last message IDs so we can track new messages on restart
+                lastMessageIds.Clear();
+
+                // Clear monitored channels
+                monitoredChannels.Clear();
+
+                OnDebugMessage("Monitoring stopped successfully");
+            }
+            catch (Exception ex)
+            {
+                OnErrorOccurred($"Error stopping monitoring: {ex.Message}");
+            }
         }
 
         /// <summary>
