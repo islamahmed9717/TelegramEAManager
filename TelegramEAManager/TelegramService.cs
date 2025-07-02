@@ -12,13 +12,14 @@ using System.Threading;
 
 namespace TelegramEAManager
 {
-    public class TelegramService
+    public class TelegramService : IDisposable
     {
         private Client? client;
         private int apiId;
         private string apiHash = "";
         private string phoneNumber = "";
         private User? me;
+
         private readonly Dictionary<long, int> lastMessageIds = new Dictionary<long, int>();
         private System.Threading.Timer? messagePollingTimer;
         private readonly List<long> monitoredChannels = new List<long>();

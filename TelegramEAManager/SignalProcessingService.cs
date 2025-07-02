@@ -229,41 +229,41 @@ namespace TelegramEAManager
             }
         }
 
-        private async Task<bool> CheckForDuplicateSignalAsync(string filePath, ProcessedSignal signal)
+       private async Task<bool> CheckForDuplicateSignalAsync(string filePath, ProcessedSignal signal)
+{
+    if (!File.Exists(filePath))
+        return false;
+
+    try
+    {
+        var lines = await File.ReadAllLinesAsync(filePath);
+        var recentLines = lines.TakeLast(50);
+
+        var signalSignature = $"|{signal.ChannelId}|{signal.ChannelName}|{signal.ParsedData?.Direction ?? ""}|{signal.ParsedData?.Symbol ?? ""}|";
+        var cutoffTime = DateTime.Now.AddMinutes(-10); // FIXED: Use local time
+
+        foreach (var line in recentLines)
         {
-            if (!File.Exists(filePath))
-                return false;
-
-            try
+            if (line.Contains(signalSignature) && !line.StartsWith("#"))
             {
-                var lines = await File.ReadAllLinesAsync(filePath);
-                var recentLines = lines.TakeLast(50);
-
-                var signalSignature = $"|{signal.ChannelId}|{signal.ChannelName}|{signal.ParsedData?.Direction ?? ""}|{signal.ParsedData?.Symbol ?? ""}|";
-                var cutoffTime = DateTime.Now.AddMinutes(-10); // FIXED: Use local time
-
-                foreach (var line in recentLines)
+                var parts = line.Split('|');
+                if (parts.Length > 0 && DateTime.TryParse(parts[0], out var lineTime))
                 {
-                    if (line.Contains(signalSignature) && !line.StartsWith("#"))
+                    if (lineTime > cutoffTime)
                     {
-                        var parts = line.Split('|');
-                        if (parts.Length > 0 && DateTime.TryParse(parts[0], out var lineTime))
-                        {
-                            if (lineTime > cutoffTime)
-                            {
-                                return true; // Found recent duplicate
-                            }
-                        }
+                        return true; // Found recent duplicate
                     }
                 }
             }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Error checking duplicates: {ex.Message}");
-            }
-
-            return false;
         }
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Error checking duplicates: {ex.Message}");
+    }
+
+    return false;
+}
         private void CleanupOldMessageHashes()
         {
             var cutoffTime = DateTime.Now.AddMinutes(-10);
