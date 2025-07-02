@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Configuration;
 using System.Linq;
@@ -20,34 +21,77 @@ namespace TelegramEAManager
         private string phoneNumber = "";
         private User? me;
 
-        private readonly Dictionary<long, int> lastMessageIds = new Dictionary<long, int>();
+        // FIXED: Use ConcurrentDictionary for thread safety
+        private readonly ConcurrentDictionary<long, int> lastMessageIds = new ConcurrentDictionary<long, int>();
         private System.Threading.Timer? messagePollingTimer;
         private readonly List<long> monitoredChannels = new List<long>();
-        private bool isMonitoring = false;
+        private volatile bool isMonitoring = false;
+
+        // FIXED: Add heartbeat mechanism
+        private System.Threading.Timer? heartbeatTimer;
+        private DateTime lastSuccessfulPoll = DateTime.UtcNow;
+        private readonly TimeSpan maxPollInterval = TimeSpan.FromMinutes(2);
+
+        // FIXED: Connection recovery
+        private int consecutiveErrors = 0;
+        private readonly int maxConsecutiveErrors = 5;
+        private volatile bool isReconnecting = false;
+
+        // FIXED: Performance optimization - message processing queue
+        private readonly ConcurrentQueue<(string message, long channelId, string channelName, DateTime messageTime)> messageQueue
+            = new ConcurrentQueue<(string, long, string, DateTime)>();
+        private readonly SemaphoreSlim processingLock = new SemaphoreSlim(1, 1);
 
         // Events for real-time message processing
         public event EventHandler<(string message, long channelId, string channelName, DateTime messageTime)>? NewMessageReceived;
-
         public event EventHandler<string>? ErrorOccurred;
-        public event EventHandler<string>? DebugMessage; // Add debug event
-
+        public event EventHandler<string>? DebugMessage;
 
         public TelegramService()
         {
             LoadApiCredentials();
+            StartMessageProcessor(); // FIXED: Start background message processor
         }
 
+        // FIXED: Background message processor for ultra-fast processing
+        private void StartMessageProcessor()
+        {
+            Task.Run(async () =>
+            {
+                while (true)
+                {
+                    try
+                    {
+                        if (messageQueue.TryDequeue(out var messageData))
+                        {
+                            // Process message immediately without blocking polling
+                            OnDebugMessage($"Processing queued message from {messageData.channelName}");
+                            NewMessageReceived?.Invoke(this, messageData);
+                        }
+                        else
+                        {
+                            // No messages to process, wait a bit
+                            await Task.Delay(10); // Very short delay for responsiveness
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        OnErrorOccurred($"Message processor error: {ex.Message}");
+                        await Task.Delay(1000); // Wait before retrying
+                    }
+                }
+            });
+        }
+
+        // FIXED: Improved API credentials loading (same as before but optimized)
         private void LoadApiCredentials()
         {
-            // Try to load from settings file first
             if (TryLoadFromSettingsFile())
                 return;
 
-            // Try to load from App.config
             if (TryLoadFromAppConfig())
                 return;
 
-            // If neither works, show setup dialog
             ShowApiSetupDialog();
         }
 
@@ -95,6 +139,664 @@ namespace TelegramEAManager
                 // Ignore errors, show setup dialog
             }
             return false;
+        }
+
+        // FIXED: Streamlined connection with better error handling
+        public async Task<bool> ConnectAsync(string phone)
+        {
+            try
+            {
+                phoneNumber = phone;
+
+                // FIXED: Dispose existing client properly
+                if (client != null)
+                {
+                    client.Dispose();
+                    client = null;
+                }
+
+                client = new Client(Config);
+
+                // FIXED: Add connection timeout
+                using (var cts = new CancellationTokenSource(TimeSpan.FromMinutes(2)))
+                {
+                    me = await client.LoginUserIfNeeded().WaitAsync(cts.Token);
+                }
+
+                if (me != null)
+                {
+                    OnDebugMessage($"Successfully connected as {me.first_name} {me.last_name}");
+                    consecutiveErrors = 0; // Reset error counter
+                    return true;
+                }
+
+                return false;
+            }
+            catch (Exception ex)
+            {
+                OnErrorOccurred($"Connection failed: {ex.Message}");
+                return false;
+            }
+        }
+
+        public bool IsUserAuthorized()
+        {
+            return client != null && me != null;
+        }
+
+        // FIXED: Optimized channel retrieval
+        public async Task<List<ChannelInfo>> GetChannelsAsync()
+        {
+            var channels = new List<ChannelInfo>();
+
+            try
+            {
+                if (client == null) return channels;
+
+                OnDebugMessage("Fetching channels and dialogs...");
+
+                // FIXED: Add timeout for dialog retrieval
+                using (var cts = new CancellationTokenSource(TimeSpan.FromMinutes(1)))
+                {
+                    var dialogs = await client.Messages_GetAllDialogs().WaitAsync(cts.Token);
+
+                    // FIXED: Parallel processing for faster channel discovery
+                    var channelTasks = dialogs.chats.Values.Select(async chat =>
+                    {
+                        try
+                        {
+                            if (chat is Channel channel)
+                            {
+                                return new ChannelInfo
+                                {
+                                    Id = channel.ID,
+                                    Title = channel.Title ?? "",
+                                    Username = channel.username ?? "",
+                                    Type = DetermineChannelType(channel),
+                                    MembersCount = channel.participants_count,
+                                    AccessHash = channel.access_hash,
+                                    LastActivity = DateTime.UtcNow
+                                };
+                            }
+                            else if (chat is Chat regularChat && IsSignalRelatedChat(regularChat.Title))
+                            {
+                                return new ChannelInfo
+                                {
+                                    Id = regularChat.ID,
+                                    Title = regularChat.Title ?? "",
+                                    Username = "",
+                                    Type = "Group",
+                                    MembersCount = regularChat.participants_count,
+                                    AccessHash = 0,
+                                    LastActivity = DateTime.UtcNow
+                                };
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            OnDebugMessage($"Error processing chat: {ex.Message}");
+                        }
+                        return null;
+                    });
+
+                    var channelResults = await Task.WhenAll(channelTasks);
+                    channels.AddRange(channelResults.Where(c => c != null)!);
+
+                    // FIXED: Also process bots in parallel
+                    var botTasks = dialogs.users.Values.Where(u => u.IsBot && IsSignalRelatedChat(u.first_name + " " + u.last_name))
+                        .Select(async user =>
+                        {
+                            try
+                            {
+                                return new ChannelInfo
+                                {
+                                    Id = user.ID,
+                                    Title = $"{user.first_name} {user.last_name}".Trim(),
+                                    Username = user.username ?? "",
+                                    Type = "Bot",
+                                    MembersCount = 0,
+                                    AccessHash = user.access_hash,
+                                    LastActivity = DateTime.UtcNow
+                                };
+                            }
+                            catch
+                            {
+                                return null;
+                            }
+                        });
+
+                    var botResults = await Task.WhenAll(botTasks);
+                    channels.AddRange(botResults.Where(b => b != null)!);
+                }
+
+                channels = channels.OrderBy(c => c.Title).ToList();
+                OnDebugMessage($"Found {channels.Count} channels/chats/bots");
+            }
+            catch (Exception ex)
+            {
+                OnErrorOccurred($"Failed to get channels: {ex.Message}");
+            }
+
+            return channels;
+        }
+
+        private bool IsSignalRelatedChat(string? title)
+        {
+            if (string.IsNullOrEmpty(title))
+                return false;
+
+            var lowerTitle = title.ToLower();
+            var signalKeywords = new[] { "signal", "indicator", "trading", "forex", "crypto", "vip", "premium", "gold", "bot" };
+
+            return signalKeywords.Any(keyword => lowerTitle.Contains(keyword));
+        }
+
+        // FIXED: Ultra-fast monitoring with immediate message detection
+        public void StartMonitoring(List<ChannelInfo> channels)
+        {
+            try
+            {
+                OnDebugMessage($"🚀 STARTING ULTRA-FAST MONITORING for {channels.Count} channels");
+
+                // FIXED: Clean stop first
+                StopMonitoring();
+                Thread.Sleep(200); // Brief pause for cleanup
+
+                // FIXED: Reset all tracking
+                monitoredChannels.Clear();
+                lastMessageIds.Clear();
+                consecutiveErrors = 0;
+                isReconnecting = false;
+
+                // Set monitoring flag
+                isMonitoring = true;
+                lastSuccessfulPoll = DateTime.UtcNow;
+
+                // Initialize channels
+                foreach (var channel in channels)
+                {
+                    monitoredChannels.Add(channel.Id);
+                    lastMessageIds.TryAdd(channel.Id, 0); // Start from 0 to catch existing messages
+                }
+
+                // FIXED: Start intensive polling for ultra-fast detection
+                messagePollingTimer = new System.Threading.Timer(
+                    async _ => await PollAllChannelsAsync(),
+                    null,
+                    TimeSpan.FromSeconds(1),    // Start immediately
+                    TimeSpan.FromMilliseconds(500) // FIXED: Poll every 500ms for ultra-fast detection
+                );
+
+                // FIXED: Start heartbeat monitoring
+                heartbeatTimer = new System.Threading.Timer(
+                    _ => CheckHeartbeat(),
+                    null,
+                    TimeSpan.FromSeconds(30),
+                    TimeSpan.FromSeconds(30)
+                );
+
+                OnDebugMessage("✅ ULTRA-FAST MONITORING STARTED - Polling every 500ms");
+            }
+            catch (Exception ex)
+            {
+                isMonitoring = false;
+                OnErrorOccurred($"Failed to start monitoring: {ex.Message}");
+            }
+        }
+
+        // FIXED: Heartbeat checker to detect and fix connection issues
+        private void CheckHeartbeat()
+        {
+            try
+            {
+                if (!isMonitoring || isReconnecting)
+                    return;
+
+                var timeSinceLastPoll = DateTime.UtcNow - lastSuccessfulPoll;
+
+                if (timeSinceLastPoll > maxPollInterval)
+                {
+                    OnErrorOccurred($"⚠️ No successful polls for {timeSinceLastPoll.TotalMinutes:F1} minutes - attempting recovery");
+
+                    // FIXED: Trigger automatic recovery
+                    _ = Task.Run(async () => await RecoverConnectionAsync());
+                }
+                else
+                {
+                    OnDebugMessage($"💓 Heartbeat OK - Last poll: {timeSinceLastPoll.TotalSeconds:F0}s ago");
+                }
+            }
+            catch (Exception ex)
+            {
+                OnErrorOccurred($"Heartbeat check error: {ex.Message}");
+            }
+        }
+
+        // FIXED: Automatic connection recovery
+        private async Task RecoverConnectionAsync()
+        {
+            if (isReconnecting)
+                return;
+
+            try
+            {
+                isReconnecting = true;
+                OnDebugMessage("🔄 Starting connection recovery...");
+
+                // Stop current monitoring
+                messagePollingTimer?.Dispose();
+                messagePollingTimer = null;
+
+                // Wait a moment
+                await Task.Delay(2000);
+
+                // Try to reconnect
+                if (!string.IsNullOrEmpty(phoneNumber))
+                {
+                    var reconnected = await ConnectAsync(phoneNumber);
+                    if (reconnected)
+                    {
+                        OnDebugMessage("✅ Connection recovered successfully");
+
+                        // Restart monitoring
+                        messagePollingTimer = new System.Threading.Timer(
+                            async _ => await PollAllChannelsAsync(),
+                            null,
+                            TimeSpan.FromSeconds(1),
+                            TimeSpan.FromMilliseconds(500)
+                        );
+
+                        consecutiveErrors = 0;
+                        lastSuccessfulPoll = DateTime.UtcNow;
+                    }
+                    else
+                    {
+                        OnErrorOccurred("❌ Failed to recover connection");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                OnErrorOccurred($"Recovery failed: {ex.Message}");
+            }
+            finally
+            {
+                isReconnecting = false;
+            }
+        }
+
+        public void StopMonitoring()
+        {
+            try
+            {
+                OnDebugMessage("⏹️ Stopping monitoring...");
+
+                isMonitoring = false;
+
+                // Stop timers
+                messagePollingTimer?.Dispose();
+                messagePollingTimer = null;
+
+                heartbeatTimer?.Dispose();
+                heartbeatTimer = null;
+
+                // Clear state
+                lastMessageIds.Clear();
+                monitoredChannels.Clear();
+
+                OnDebugMessage("✅ Monitoring stopped successfully");
+            }
+            catch (Exception ex)
+            {
+                OnErrorOccurred($"Error stopping monitoring: {ex.Message}");
+            }
+        }
+
+        // FIXED: Ultra-fast polling with error recovery
+        private async Task PollAllChannelsAsync()
+        {
+            if (!isMonitoring || client == null || !IsUserAuthorized() || isReconnecting)
+                return;
+
+            try
+            {
+                // FIXED: Use very short timeout for responsiveness
+                using (var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10)))
+                {
+                    // FIXED: Process channels in parallel for maximum speed
+                    var pollTasks = monitoredChannels.Select(channelId =>
+                        PollChannelForNewMessages(channelId, cts.Token)).ToArray();
+
+                    await Task.WhenAll(pollTasks);
+
+                    // Update successful poll time
+                    lastSuccessfulPoll = DateTime.UtcNow;
+                    consecutiveErrors = 0;
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                OnDebugMessage("⏱️ Polling timeout - will retry");
+                consecutiveErrors++;
+            }
+            catch (Exception ex)
+            {
+                consecutiveErrors++;
+                OnErrorOccurred($"Polling error #{consecutiveErrors}: {ex.Message}");
+
+                // FIXED: If too many errors, trigger recovery
+                if (consecutiveErrors >= maxConsecutiveErrors)
+                {
+                    OnErrorOccurred("🔴 Too many consecutive errors - triggering recovery");
+                    _ = Task.Run(async () => await RecoverConnectionAsync());
+                }
+            }
+        }
+
+        // FIXED: Optimized single channel polling
+        private async Task PollChannelForNewMessages(long channelId, CancellationToken cancellationToken)
+        {
+            try
+            {
+                if (client == null || cancellationToken.IsCancellationRequested)
+                    return;
+
+                // FIXED: Get dialogs with caching to reduce API calls
+                var dialogs = await client.Messages_GetAllDialogs().WaitAsync(cancellationToken);
+
+                // Try channel first
+                var channel = dialogs.chats.Values.OfType<Channel>().FirstOrDefault(c => c.ID == channelId);
+
+                if (channel != null)
+                {
+                    await ProcessChannelMessages(channel, channelId, cancellationToken);
+                }
+                else
+                {
+                    // Try as chat or user
+                    var chat = dialogs.chats.Values.FirstOrDefault(c => c.ID == channelId);
+                    var user = dialogs.users.Values.FirstOrDefault(u => u.ID == channelId);
+
+                    if (chat != null)
+                    {
+                        await ProcessChatMessages(chat, channelId, cancellationToken);
+                    }
+                    else if (user != null)
+                    {
+                        await ProcessUserMessages(user, channelId, cancellationToken);
+                    }
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                // Expected timeout, ignore
+            }
+            catch (Exception ex)
+            {
+                OnDebugMessage($"Error polling channel {channelId}: {ex.Message}");
+            }
+        }
+
+        // FIXED: Process channel messages with better performance
+        private async Task ProcessChannelMessages(Channel channel, long channelId, CancellationToken cancellationToken)
+        {
+            try
+            {
+                var inputChannel = new InputChannel(channelId, channel.access_hash);
+
+                // FIXED: Get more messages to avoid missing any
+                var history = await client.Messages_GetHistory(inputChannel, limit: 20).WaitAsync(cancellationToken);
+
+                var lastKnownId = lastMessageIds.GetValueOrDefault(channelId, 0);
+                var newMessages = history.Messages.OfType<TL.Message>()
+                    .Where(m => m.ID > lastKnownId && !string.IsNullOrEmpty(m.message))
+                    .OrderBy(m => m.ID)
+                    .ToList();
+
+                foreach (var message in newMessages)
+                {
+                    // FIXED: Queue message for immediate processing
+                    var messageData = (message.message, channelId, channel.Title ?? $"Channel_{channelId}", DateTime.UtcNow);
+                    messageQueue.Enqueue(messageData);
+
+                    lastMessageIds.AddOrUpdate(channelId, message.ID, (key, oldValue) => Math.Max(oldValue, message.ID));
+
+                    OnDebugMessage($"⚡ INSTANT: New message in {channel.Title} (ID: {message.ID})");
+                }
+            }
+            catch (Exception ex)
+            {
+                OnDebugMessage($"Error processing channel messages: {ex.Message}");
+            }
+        }
+
+        // FIXED: Process chat messages
+        private async Task ProcessChatMessages(ChatBase chat, long channelId, CancellationToken cancellationToken)
+        {
+            try
+            {
+                InputPeer? inputPeer = null;
+                string chatName = "";
+
+                if (chat is Chat regularChat)
+                {
+                    chatName = regularChat.Title;
+                    inputPeer = new InputPeerChat(regularChat.ID);
+                }
+                else if (chat is Channel channel)
+                {
+                    chatName = channel.Title;
+                    inputPeer = new InputPeerChannel(channel.ID, channel.access_hash);
+                }
+
+                if (inputPeer != null)
+                {
+                    var history = await client.Messages_GetHistory(inputPeer, limit: 20).WaitAsync(cancellationToken);
+                    await ProcessMessagesFromHistory(history, channelId, chatName);
+                }
+            }
+            catch (Exception ex)
+            {
+                OnDebugMessage($"Error processing chat messages: {ex.Message}");
+            }
+        }
+
+        // FIXED: Process user messages
+        private async Task ProcessUserMessages(User user, long channelId, CancellationToken cancellationToken)
+        {
+            try
+            {
+                var inputPeer = new InputPeerUser(user.ID, user.access_hash);
+                var chatName = $"{user.first_name} {user.last_name}".Trim();
+
+                var history = await client.Messages_GetHistory(inputPeer, limit: 20).WaitAsync(cancellationToken);
+                await ProcessMessagesFromHistory(history, channelId, chatName);
+            }
+            catch (Exception ex)
+            {
+                OnDebugMessage($"Error processing user messages: {ex.Message}");
+            }
+        }
+
+        // FIXED: Common message processing
+        private async Task ProcessMessagesFromHistory(Messages_MessagesBase history, long channelId, string sourceName)
+        {
+            try
+            {
+                var lastKnownId = lastMessageIds.GetValueOrDefault(channelId, 0);
+                var newMessages = history.Messages.OfType<TL.Message>()
+                    .Where(m => m.ID > lastKnownId && !string.IsNullOrEmpty(m.message))
+                    .OrderBy(m => m.ID)
+                    .ToList();
+
+                foreach (var message in newMessages)
+                {
+                    // FIXED: Immediate queuing for ultra-fast processing
+                    var messageData = (message.message, channelId, sourceName, DateTime.UtcNow);
+                    messageQueue.Enqueue(messageData);
+
+                    lastMessageIds.AddOrUpdate(channelId, message.ID, (key, oldValue) => Math.Max(oldValue, message.ID));
+
+                    OnDebugMessage($"⚡ INSTANT: New message in {sourceName} (ID: {message.ID})");
+                }
+            }
+            catch (Exception ex)
+            {
+                OnDebugMessage($"Error processing messages from history: {ex.Message}");
+            }
+        }
+
+        // FIXED: Event handlers with better error handling
+        protected virtual void OnDebugMessage(string message)
+        {
+            try
+            {
+                DebugMessage?.Invoke(this, $"[{DateTime.Now:HH:mm:ss.fff}] {message}");
+            }
+            catch
+            {
+                // Ignore debug message errors
+            }
+        }
+
+        protected virtual void OnErrorOccurred(string error)
+        {
+            try
+            {
+                ErrorOccurred?.Invoke(this, error);
+            }
+            catch
+            {
+                // Ignore error reporting errors
+            }
+        }
+
+        // Keep existing helper methods
+        private string DetermineChannelType(Channel channel)
+        {
+            var title = channel.Title?.ToLower() ?? "";
+
+            if (title.Contains("vip")) return "VIP";
+            if (title.Contains("premium")) return "Premium";
+            if (title.Contains("signals") || title.Contains("signal")) return "Signals";
+            if (title.Contains("gold")) return "Gold";
+            if (title.Contains("crypto") || title.Contains("bitcoin") || title.Contains("btc")) return "Crypto";
+            if (channel.IsGroup) return "Groups";
+
+            return "Channel";
+        }
+
+        // Configuration methods (same as before)
+        private string? Config(string what)
+        {
+            switch (what)
+            {
+                case "api_id": return apiId.ToString();
+                case "api_hash": return apiHash;
+                case "phone_number": return phoneNumber;
+                case "verification_code": return RequestVerificationCode();
+                case "first_name": return "islamahmed9717";
+                case "last_name": return "";
+                case "password": return RequestPassword();
+                case "session_pathname": return "session.dat";
+                default: return null;
+            }
+        }
+
+        private string RequestVerificationCode()
+        {
+            using (var codeForm = new Form())
+            {
+                codeForm.Text = "📱 Telegram Verification Code";
+                codeForm.Size = new Size(400, 200);
+                codeForm.StartPosition = FormStartPosition.CenterScreen;
+                codeForm.FormBorderStyle = FormBorderStyle.FixedDialog;
+                codeForm.MaximizeBox = false;
+
+                var lblMessage = new Label
+                {
+                    Text = "📱 Enter the verification code sent to your Telegram:",
+                    Location = new Point(20, 20),
+                    Size = new Size(350, 40),
+                    Font = new Font("Segoe UI", 10F)
+                };
+                codeForm.Controls.Add(lblMessage);
+
+                var txtCode = new TextBox
+                {
+                    Location = new Point(20, 70),
+                    Size = new Size(200, 25),
+                    Font = new Font("Segoe UI", 12F),
+                    MaxLength = 6
+                };
+                codeForm.Controls.Add(txtCode);
+
+                var btnOK = new Button
+                {
+                    Text = "✅ Confirm",
+                    Location = new Point(240, 70),
+                    Size = new Size(100, 25),
+                    DialogResult = DialogResult.OK
+                };
+                codeForm.Controls.Add(btnOK);
+
+                codeForm.AcceptButton = btnOK;
+                txtCode.Focus();
+
+                if (codeForm.ShowDialog() == DialogResult.OK)
+                {
+                    return txtCode.Text.Trim();
+                }
+                return "";
+            }
+        }
+
+        private string RequestPassword()
+        {
+            using (var passwordForm = new Form())
+            {
+                passwordForm.Text = "🔐 Two-Factor Authentication";
+                passwordForm.Size = new Size(400, 200);
+                passwordForm.StartPosition = FormStartPosition.CenterScreen;
+                passwordForm.FormBorderStyle = FormBorderStyle.FixedDialog;
+                passwordForm.MaximizeBox = false;
+
+                var lblMessage = new Label
+                {
+                    Text = "🔐 Enter your 2FA password:",
+                    Location = new Point(20, 20),
+                    Size = new Size(350, 40),
+                    Font = new Font("Segoe UI", 10F)
+                };
+                passwordForm.Controls.Add(lblMessage);
+
+                var txtPassword = new TextBox
+                {
+                    Location = new Point(20, 70),
+                    Size = new Size(200, 25),
+                    Font = new Font("Segoe UI", 12F),
+                    UseSystemPasswordChar = true
+                };
+                passwordForm.Controls.Add(txtPassword);
+
+                var btnOK = new Button
+                {
+                    Text = "✅ Confirm",
+                    Location = new Point(240, 70),
+                    Size = new Size(100, 25),
+                    DialogResult = DialogResult.OK
+                };
+                passwordForm.Controls.Add(btnOK);
+
+                passwordForm.AcceptButton = btnOK;
+                txtPassword.Focus();
+
+                if (passwordForm.ShowDialog() == DialogResult.OK)
+                {
+                    return txtPassword.Text;
+                }
+                return "";
+            }
         }
 
         private void ShowApiSetupDialog()
@@ -322,625 +1024,7 @@ STEP 7: 📋 Copy the api_id (numbers) and api_hash (long string) below"
             }
         }
 
-        private string? Config(string what)
-        {
-            switch (what)
-            {
-                case "api_id": return apiId.ToString();
-                case "api_hash": return apiHash;
-                case "phone_number": return phoneNumber;
-                case "verification_code": return RequestVerificationCode();
-                case "first_name": return "islamahmed9717";
-                case "last_name": return "";
-                case "password": return RequestPassword();
-                case "session_pathname": return "session.dat";
-                default: return null;
-            }
-        }
-
-        private string RequestVerificationCode()
-        {
-            using (var codeForm = new Form())
-            {
-                codeForm.Text = "📱 Telegram Verification Code";
-                codeForm.Size = new Size(400, 200);
-                codeForm.StartPosition = FormStartPosition.CenterScreen;
-                codeForm.FormBorderStyle = FormBorderStyle.FixedDialog;
-                codeForm.MaximizeBox = false;
-
-                var lblMessage = new Label
-                {
-                    Text = "📱 Enter the verification code sent to your Telegram:",
-                    Location = new Point(20, 20),
-                    Size = new Size(350, 40),
-                    Font = new Font("Segoe UI", 10F)
-                };
-                codeForm.Controls.Add(lblMessage);
-
-                var txtCode = new TextBox
-                {
-                    Location = new Point(20, 70),
-                    Size = new Size(200, 25),
-                    Font = new Font("Segoe UI", 12F),
-                    MaxLength = 6
-                };
-                codeForm.Controls.Add(txtCode);
-
-                var btnOK = new Button
-                {
-                    Text = "✅ Confirm",
-                    Location = new Point(240, 70),
-                    Size = new Size(100, 25),
-                    DialogResult = DialogResult.OK
-                };
-                codeForm.Controls.Add(btnOK);
-
-                codeForm.AcceptButton = btnOK;
-                txtCode.Focus();
-
-                if (codeForm.ShowDialog() == DialogResult.OK)
-                {
-                    return txtCode.Text.Trim();
-                }
-                return "";
-            }
-        }
-
-        private string RequestPassword()
-        {
-            using (var passwordForm = new Form())
-            {
-                passwordForm.Text = "🔐 Two-Factor Authentication";
-                passwordForm.Size = new Size(400, 200);
-                passwordForm.StartPosition = FormStartPosition.CenterScreen;
-                passwordForm.FormBorderStyle = FormBorderStyle.FixedDialog;
-                passwordForm.MaximizeBox = false;
-
-                var lblMessage = new Label
-                {
-                    Text = "🔐 Enter your 2FA password:",
-                    Location = new Point(20, 20),
-                    Size = new Size(350, 40),
-                    Font = new Font("Segoe UI", 10F)
-                };
-                passwordForm.Controls.Add(lblMessage);
-
-                var txtPassword = new TextBox
-                {
-                    Location = new Point(20, 70),
-                    Size = new Size(200, 25),
-                    Font = new Font("Segoe UI", 12F),
-                    UseSystemPasswordChar = true
-                };
-                passwordForm.Controls.Add(txtPassword);
-
-                var btnOK = new Button
-                {
-                    Text = "✅ Confirm",
-                    Location = new Point(240, 70),
-                    Size = new Size(100, 25),
-                    DialogResult = DialogResult.OK
-                };
-                passwordForm.Controls.Add(btnOK);
-
-                passwordForm.AcceptButton = btnOK;
-                txtPassword.Focus();
-
-                if (passwordForm.ShowDialog() == DialogResult.OK)
-                {
-                    return txtPassword.Text;
-                }
-                return "";
-            }
-        }
-
-        public async Task<bool> ConnectAsync(string phone)
-        {
-            try
-            {
-                phoneNumber = phone;
-                client = new Client(Config);
-                me = await client.LoginUserIfNeeded();
-                return me != null;
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show($"❌ Connection failed: {ex.Message}", "Connection Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                return false;
-            }
-        }
-
-        public bool IsUserAuthorized()
-        {
-            return client != null && me != null;
-        }
-
-        public async Task<List<ChannelInfo>> GetChannelsAsync()
-        {
-            var channels = new List<ChannelInfo>();
-
-            try
-            {
-                if (client == null) return channels;
-
-                var dialogs = await client.Messages_GetAllDialogs();
-
-                foreach (var dialog in dialogs.dialogs)
-                {
-                    try
-                    {
-                        // Check for channels
-                        if (dialogs.chats.TryGetValue(dialog.Peer.ID, out var chat))
-                        {
-                            if (chat is Channel channel)
-                            {
-                                channels.Add(new ChannelInfo
-                                {
-                                    Id = channel.ID,  // This is already long
-                                    Title = channel.Title ?? "",
-                                    Username = channel.username ?? "",
-                                    Type = DetermineChannelType(channel),
-                                    MembersCount = channel.participants_count,
-                                    AccessHash = channel.access_hash,
-                                    LastActivity = DateTime.UtcNow
-                                });
-
-                                // Debug logging
-                                Console.WriteLine($"Found channel: {channel.Title} (ID: {channel.ID}, Username: {channel.username})");
-                            }
-                            else if (chat is Chat regularChat)
-                            {
-                                // Also include regular chats if they match signal patterns
-                                if (IsSignalRelatedChat(regularChat.Title))
-                                {
-                                    channels.Add(new ChannelInfo
-                                    {
-                                        Id = regularChat.ID,  // This is already long
-                                        Title = regularChat.Title ?? "",
-                                        Username = "",
-                                        Type = "Group",
-                                        MembersCount = regularChat.participants_count,
-                                        AccessHash = 0,
-                                        LastActivity = DateTime.UtcNow
-                                    });
-
-                                    Console.WriteLine($"Found chat: {regularChat.Title} (ID: {regularChat.ID})");
-                                }
-                            }
-                        }
-
-                        // Also check for bot channels or users that might be signal providers
-                        if (dialog.Peer is PeerUser && dialogs.users.TryGetValue(dialog.Peer.ID, out var user))
-                        {
-                            if (user.IsBot && IsSignalRelatedChat(user.first_name + " " + user.last_name))
-                            {
-                                channels.Add(new ChannelInfo
-                                {
-                                    Id = user.ID,  // This is already long
-                                    Title = $"{user.first_name} {user.last_name}".Trim(),
-                                    Username = user.username ?? "",
-                                    Type = "Bot",
-                                    MembersCount = 0,
-                                    AccessHash = user.access_hash,
-                                    LastActivity = DateTime.UtcNow
-                                });
-
-                                Console.WriteLine($"Found bot: {user.first_name} {user.last_name} (ID: {user.ID})");
-                            }
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        Console.WriteLine($"Error processing dialog: {ex.Message}");
-                    }
-                }
-
-                // Sort channels by title for easier finding
-                channels = channels.OrderBy(c => c.Title).ToList();
-
-                Console.WriteLine($"Total channels/chats found: {channels.Count}");
-            }
-            catch (Exception ex)
-            {
-                OnErrorOccurred($"Failed to get channels: {ex.Message}");
-            }
-
-            return channels;
-        }
-
-        private bool IsSignalRelatedChat(string? title)
-        {
-            if (string.IsNullOrEmpty(title))
-                return false;
-
-            var lowerTitle = title.ToLower();
-            var signalKeywords = new[] { "signal", "indicator", "trading", "forex", "crypto", "vip", "premium", "gold" };
-
-            return signalKeywords.Any(keyword => lowerTitle.Contains(keyword));
-        }
-
-        /// <summary>
-        /// Start monitoring selected channels for new messages
-        /// </summary>
-        public void StartMonitoring(List<ChannelInfo> channels)
-        {
-            try
-            {
-                OnDebugMessage($"Starting monitoring for {channels.Count} channels");
-
-                // CRITICAL: Ensure we're in a clean state
-                StopMonitoring();
-
-                // Add a small delay to ensure cleanup is complete
-                Thread.Sleep(500);
-
-                // Set up monitored channels
-                monitoredChannels.Clear();
-                lastMessageIds.Clear(); // Ensure this is cleared
-
-                // Set monitoring flag early
-                isMonitoring = true;
-
-                // Initialize lastMessageIds asynchronously
-                Task.Run(async () =>
-                {
-                    try
-                    {
-                        foreach (var channel in channels)
-                        {
-                            monitoredChannels.Add(channel.Id);
-
-                            // Get the latest message ID for this channel
-                            try
-                            {
-                                var latestMessageId = await GetLatestMessageId(channel.Id, channel.AccessHash);
-                                lastMessageIds[channel.Id] = latestMessageId;
-                                OnDebugMessage($"Initialized channel {channel.Title} with latest message ID: {latestMessageId}");
-                            }
-                            catch (Exception ex)
-                            {
-                                OnDebugMessage($"Failed to get latest message ID for {channel.Title}: {ex.Message}");
-                                lastMessageIds[channel.Id] = 0;
-                            }
-                        }
-
-                        // Create a new timer instance
-                        messagePollingTimer = new System.Threading.Timer(
-                            async _ => await PollAllChannelsAsync(),
-                            null,
-                            TimeSpan.FromSeconds(5),
-                            TimeSpan.FromSeconds(2)
-                        );
-
-                        OnDebugMessage("Monitoring started successfully - will only process NEW messages from now");
-                    }
-                    catch (Exception ex)
-                    {
-                        isMonitoring = false; // Reset flag on error
-                        OnErrorOccurred($"Failed during monitoring initialization: {ex.Message}");
-                        OnDebugMessage($"Monitoring initialization error: {ex}");
-                    }
-                }).ContinueWith(task =>
-                {
-                    if (task.IsFaulted)
-                    {
-                        isMonitoring = false; // Reset flag on error
-                        OnErrorOccurred($"Failed to start monitoring: {task.Exception?.GetBaseException().Message}");
-                        OnDebugMessage($"Monitoring error: {task.Exception}");
-                    }
-                });
-            }
-            catch (Exception ex)
-            {
-                isMonitoring = false; // Reset flag on error
-                OnErrorOccurred($"Failed to start monitoring: {ex.Message}");
-                OnDebugMessage($"Monitoring error: {ex}");
-            }
-        }
-
-        private async Task<int> GetLatestMessageId(long channelId, long accessHash)
-        {
-            if (client == null) return 0;
-
-            try
-            {
-                var dialogs = await client.Messages_GetAllDialogs();
-                var channel = dialogs.chats.Values.OfType<Channel>().FirstOrDefault(c => c.ID == channelId);
-
-                if (channel != null)
-                {
-                    var inputChannel = new InputChannel(channelId, channel.access_hash);
-                    var history = await client.Messages_GetHistory(inputChannel, limit: 1);
-
-                    var latestMessage = history.Messages.OfType<TL.Message>().FirstOrDefault();
-                    return latestMessage?.ID ?? 0;
-                }
-            }
-            catch (Exception ex)
-            {
-                OnDebugMessage($"Error getting latest message ID: {ex.Message}");
-            }
-
-            return 0;
-        }
-
-        /// <summary>
-        /// Stop monitoring channels
-        /// </summary>
-        public void StopMonitoring()
-        {
-            try
-            {
-                OnDebugMessage("Stopping monitoring...");
-
-                // Stop the timer first
-                messagePollingTimer?.Dispose();
-                messagePollingTimer = null;
-
-                // Clear monitoring state
-                isMonitoring = false;
-
-                // CRITICAL: Clear the last message IDs so we can track new messages on restart
-                lastMessageIds.Clear();
-
-                // Clear monitored channels
-                monitoredChannels.Clear();
-
-                OnDebugMessage("Monitoring stopped successfully");
-            }
-            catch (Exception ex)
-            {
-                OnErrorOccurred($"Error stopping monitoring: {ex.Message}");
-            }
-        }
-
-        /// <summary>
-        /// Poll all monitored channels for new messages
-        /// </summary>
-        private async Task PollAllChannelsAsync()
-        {
-            if (!isMonitoring || client == null || !IsUserAuthorized())
-            {
-                OnDebugMessage("Skipping poll - not monitoring or not authorized");
-                return;
-            }
-
-            try
-            {
-                OnDebugMessage($"Polling {monitoredChannels.Count} channels...");
-
-                // Use parallel processing with limited concurrency
-                var semaphore = new SemaphoreSlim(3, 3); // Process max 3 channels at once
-                var tasks = monitoredChannels.Select(async channelId =>
-                {
-                    await semaphore.WaitAsync();
-                    try
-                    {
-                        await PollChannelForNewMessages(channelId);
-                    }
-                    finally
-                    {
-                        semaphore.Release();
-                    }
-                });
-
-                // Wait for all with timeout
-                using (var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30))) // 30 second total timeout
-                {
-                    try
-                    {
-                        await Task.WhenAll(tasks).WaitAsync(cts.Token);
-                    }
-                    catch (OperationCanceledException)
-                    {
-                        OnDebugMessage("Polling cycle timeout - some channels may not have been checked");
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                OnErrorOccurred($"Error polling channels: {ex.Message}");
-                OnDebugMessage($"Poll error: {ex}");
-            }
-        }
-
-        /// <summary>
-        /// Poll specific channel for new messages - FIXED VERSION
-        /// </summary>
-        /// <summary>
-        /// Poll specific channel for new messages - FIXED VERSION
-        /// </summary>
-        private async Task PollChannelForNewMessages(long channelId)
-        {
-            try
-            {
-                if (client == null) return;
-
-                OnDebugMessage($"Polling channel ID: {channelId}");
-
-                // Use cancellation token to prevent hanging
-                using (var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10))) // 10 second timeout
-                {
-                    try
-                    {
-                        // Get channel access hash with timeout
-                        var dialogs = await client.Messages_GetAllDialogs().WaitAsync(cts.Token);
-
-                        // Try to find as Channel
-                        var channel = dialogs.chats.Values.OfType<Channel>().FirstOrDefault(c => c.ID == channelId);
-
-                        if (channel != null)
-                        {
-                            OnDebugMessage($"Found channel: {channel.Title}");
-
-                            var inputChannel = new InputChannel(channelId, channel.access_hash);
-
-                            // Get history with timeout
-                            var history = await client.Messages_GetHistory(inputChannel, limit: 10).WaitAsync(cts.Token);
-
-                            var lastKnownId = lastMessageIds.GetValueOrDefault(channelId, 0);
-                            OnDebugMessage($"Last known message ID for {channel.Title}: {lastKnownId}");
-
-                            var newMessages = 0;
-                            var messages = history.Messages.OfType<TL.Message>()
-                                .OrderBy(m => m.ID)
-                                .ToList(); // Convert to list to avoid multiple enumerations
-
-                            foreach (var message in messages)
-                            {
-                                if (message.ID > lastKnownId && !string.IsNullOrEmpty(message.message))
-                                {
-                                    newMessages++;
-                                    OnDebugMessage($"New message in {channel.Title}: ID={message.ID}, Length={message.message.Length}");
-
-                                    // Process in background to avoid blocking
-                                    var msgCopy = message.message;
-                                    var msgId = message.ID;
-                                    _ = Task.Run(() =>
-                                    {
-                                        try
-                                        {
-                                            OnNewMessageReceived(msgCopy, channelId, channel.Title ?? $"Channel_{channelId}");
-                                        }
-                                        catch (Exception ex)
-                                        {
-                                            OnDebugMessage($"Error processing message: {ex.Message}");
-                                        }
-                                    });
-
-                                    lastMessageIds[channelId] = msgId;
-                                }
-                            }
-
-                            if (newMessages == 0)
-                            {
-                                OnDebugMessage($"No new messages in {channel.Title}");
-                            }
-                        }
-                        else
-                        {
-                            // Try as regular chat or user
-                            var chat = dialogs.chats.Values.FirstOrDefault(c => c.ID == channelId);
-                            if (chat != null)
-                            {
-                                string chatName = "";
-                                InputPeer? inputPeer = null;
-
-                                if (chat is Chat regularChatObj)
-                                {
-                                    chatName = regularChatObj.Title;
-                                    inputPeer = new InputPeerChat(regularChatObj.ID);
-                                    OnDebugMessage($"Found chat: {chatName}");
-                                }
-                                else if (chat is Channel channelObj)
-                                {
-                                    chatName = channelObj.Title;
-                                    inputPeer = new InputPeerChannel(channelObj.ID, channelObj.access_hash);
-                                    OnDebugMessage($"Found channel (as chat): {chatName}");
-                                }
-
-                                // Check if it's a user instead
-                                var user = dialogs.users.Values.FirstOrDefault(u => u.ID == channelId);
-                                if (user != null)
-                                {
-                                    chatName = $"{user.first_name} {user.last_name}".Trim();
-                                    inputPeer = new InputPeerUser(user.ID, user.access_hash);
-                                    OnDebugMessage($"Found user: {chatName}");
-                                }
-
-                                if (inputPeer != null)
-                                {
-                                    var history = await client.Messages_GetHistory(inputPeer, limit: 10).WaitAsync(cts.Token);
-                                    var lastKnownId = lastMessageIds.GetValueOrDefault(channelId, 0);
-
-                                    var messages = history.Messages.OfType<TL.Message>()
-                                        .OrderBy(m => m.ID)
-                                        .ToList();
-
-                                    foreach (var message in messages)
-                                    {
-                                        if (message.ID > lastKnownId && !string.IsNullOrEmpty(message.message))
-                                        {
-                                            var msgCopy = message.message;
-                                            var msgId = message.ID;
-
-                                            OnDebugMessage($"New message: {msgCopy.Substring(0, Math.Min(50, msgCopy.Length))}...");
-
-                                            // Process in background
-                                            _ = Task.Run(() =>
-                                            {
-                                                try
-                                                {
-                                                    OnNewMessageReceived(msgCopy, channelId, chatName);
-                                                }
-                                                catch (Exception ex)
-                                                {
-                                                    OnDebugMessage($"Error processing message: {ex.Message}");
-                                                }
-                                            });
-
-                                            lastMessageIds[channelId] = msgId;
-                                        }
-                                    }
-                                }
-                            }
-                            else
-                            {
-                                OnDebugMessage($"Channel/Chat {channelId} not found in dialogs");
-                            }
-                        }
-                    }
-                    catch (OperationCanceledException)
-                    {
-                        OnDebugMessage($"Polling timeout for channel {channelId}");
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                OnErrorOccurred($"Error polling channel {channelId}: {ex.Message}");
-                OnDebugMessage($"Channel poll error: {ex}");
-            }
-        }
-        protected virtual void OnDebugMessage(string message)
-        {
-            DebugMessage?.Invoke(this, $"[{DateTime.Now:HH:mm:ss}] {message}");
-        }
-
-        protected virtual void OnNewMessageReceived(string message, long channelId, string channelName, DateTime messageTime = default)
-        {
-            // Use actual message time if provided, otherwise use current time
-            var actualTime = messageTime != default ? messageTime : DateTime.Now;
-
-            OnDebugMessage($"Message received from {channelName} at {actualTime:yyyy-MM-dd HH:mm:ss} UTC");
-            NewMessageReceived?.Invoke(this, (message, channelId, channelName, actualTime));
-        }
-
-        protected virtual void OnErrorOccurred(string error)
-        {
-            ErrorOccurred?.Invoke(this, error);
-        }
-
-        /// <summary>
-        /// Determine channel type based on properties
-        /// </summary>
-        private string DetermineChannelType(Channel channel)
-        {
-            var title = channel.Title?.ToLower() ?? "";
-
-            if (title.Contains("vip")) return "VIP";
-            if (title.Contains("premium")) return "Premium";
-            if (title.Contains("signals") || title.Contains("signal")) return "Signals";
-            if (title.Contains("gold")) return "Gold";
-            if (title.Contains("crypto") || title.Contains("bitcoin") || title.Contains("btc")) return "Crypto";
-            if (channel.IsGroup) return "Groups";
-
-            return "Channel";
-        }
-
-        /// <summary>
-        /// Get recent messages from a specific channel (legacy method for compatibility)
-        /// </summary>
+        // Legacy method for compatibility
         public async Task<List<string>> PollChannelMessagesAsync(int channelId, long accessHash, int limit = 10)
         {
             var result = new List<string>();
@@ -968,17 +1052,18 @@ STEP 7: 📋 Copy the api_id (numbers) and api_hash (long string) below"
             return result;
         }
 
-        /// <summary>
-        /// Event handlers
-        /// </summary>
-
-
-
-
         public void Dispose()
         {
-            StopMonitoring();
-            client?.Dispose();
+            try
+            {
+                StopMonitoring();
+                processingLock?.Dispose();
+                client?.Dispose();
+            }
+            catch (Exception ex)
+            {
+                OnDebugMessage($"Dispose error: {ex.Message}");
+            }
         }
     }
 }

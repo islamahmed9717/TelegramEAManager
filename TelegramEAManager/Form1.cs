@@ -34,7 +34,20 @@ namespace TelegramEAManager
 
         private readonly ConcurrentDictionary<string, DateTime> recentSignalsInUI = new ConcurrentDictionary<string, DateTime>();
         private readonly SemaphoreSlim uiUpdateSemaphore = new SemaphoreSlim(1, 1);
+        private int connectionCheckCounter = 0;
         private System.Threading.Timer? uiCleanupTimer;
+
+        private readonly ConcurrentQueue<(ProcessedSignal signal, long channelId, string channelName)> uiUpdateQueue
+    = new ConcurrentQueue<(ProcessedSignal, long, string)>();
+
+        // Fix for CS0191: A readonly field cannot be assigned to (except in a constructor or init-only setter of the type in which the field is defined or a variable initializer)
+        // Fix for CS0104: 'Timer' is an ambiguous reference between 'System.Windows.Forms.Timer' and 'System.Threading.Timer'
+
+        // Update the declaration of `uiProcessingTimer` to remove the readonly modifier and ensure the correct namespace is used for Timer.
+
+        #region Private Fields
+        private System.Windows.Forms.Timer uiProcessingTimer; // Use System.Windows.Forms.Timer explicitly
+
 
         #endregion
 
@@ -45,34 +58,76 @@ namespace TelegramEAManager
             SetupUI();
             LoadApplicationSettings();
             SetupTimers();
+            InitializeUltraFastProcessing(); // Add this line
         }
+
+
+        // Update the method where the assignment occurs to ensure the correct namespace is used and the readonly issue is resolved.
+        private void InitializeUltraFastProcessing()
+        {
+            // FIXED: Ultra-fast UI processing timer
+            uiProcessingTimer = new System.Windows.Forms.Timer { Interval = 50 }; // Process UI updates every 50ms
+            uiProcessingTimer.Tick += ProcessUIUpdateQueue;
+            uiProcessingTimer.Start();
+        }
+
+        // FIXED: Queue-based UI processing to prevent blocking
+        private void ProcessUIUpdateQueue(object? sender, EventArgs e)
+        {
+            var processedCount = 0;
+            var maxBatch = 10; // Process max 10 updates per cycle
+
+            while (uiUpdateQueue.TryDequeue(out var updateData) && processedCount < maxBatch)
+            {
+                try
+                {
+                    UpdateUIAfterSignalInternal(updateData.signal, updateData.channelId, updateData.channelName);
+                    processedCount++;
+                }
+                catch (Exception ex)
+                {
+                    LogMessage($"❌ UI update error: {ex.Message}");
+                }
+            }
+
+            if (processedCount > 0)
+            {
+                LogMessage($"⚡ Processed {processedCount} UI updates in batch");
+            }
+        }
+
+        // FIXED: Enhanced cleanup with performance monitoring
         private void StartAutoCleanup()
         {
-            // Stop existing timer if any
             cleanupTimer?.Stop();
             cleanupTimer?.Dispose();
 
-            // Create new cleanup timer (runs every 5 minutes)
             cleanupTimer = new System.Windows.Forms.Timer
             {
-                Interval = 300000 // 5 minutes
+                Interval = 120000 // Clean every 2 minutes for ultra-fast mode
             };
 
             cleanupTimer.Tick += (s, e) =>
             {
-                try
+                Task.Run(() =>
                 {
-                    signalProcessor.CleanupProcessedSignals();
-                    LogMessage("🧹 Auto-cleanup completed - removed old/processed signals");
-                }
-                catch (Exception ex)
-                {
-                    LogMessage($"❌ Auto-cleanup error: {ex.Message}");
-                }
+                    try
+                    {
+                        var startTime = DateTime.Now;
+                        signalProcessor.CleanupProcessedSignals();
+                        var cleanupTime = (DateTime.Now - startTime).TotalMilliseconds;
+
+                        LogMessage($"🧹 Ultra-fast cleanup completed in {cleanupTime:F0}ms");
+                    }
+                    catch (Exception ex)
+                    {
+                        LogMessage($"❌ Auto-cleanup error: {ex.Message}");
+                    }
+                });
             };
 
             cleanupTimer.Start();
-            LogMessage("🧹 Auto-cleanup started (runs every 5 minutes)");
+            LogMessage("🧹 Ultra-fast auto-cleanup started (every 2 minutes)");
         }
         private void CreateDebugConsole()
         {
@@ -662,36 +717,21 @@ namespace TelegramEAManager
         {
             try
             {
-                // FIXED: Process in background thread to avoid UI blocking
-                await Task.Run(async () =>
+                // FIXED: Process in background thread immediately
+                _ = Task.Run(() =>
                 {
                     try
                     {
                         var processedSignal = signalProcessor.ProcessTelegramMessage(e.message, e.channelId, e.channelName);
 
-                        // FIXED: Update UI safely
-                        if (this.InvokeRequired)
-                        {
-                            this.BeginInvoke(new Action(() => {
-                                UpdateUIAfterSignal(processedSignal, e.channelId, e.channelName);
-                            }));
-                        }
-                        else
-                        {
-                            UpdateUIAfterSignal(processedSignal, e.channelId, e.channelName);
-                        }
+                        // FIXED: Queue for UI update instead of blocking
+                        uiUpdateQueue.Enqueue((processedSignal, e.channelId, e.channelName));
+
+                        LogMessage($"⚡ INSTANT: Signal queued from {e.channelName} at {DateTime.Now:HH:mm:ss.fff}");
                     }
                     catch (Exception ex)
                     {
-                        // FIXED: Safe error logging
-                        if (this.InvokeRequired)
-                        {
-                            this.BeginInvoke(new Action(() => LogMessage($"❌ Error processing message: {ex.Message}")));
-                        }
-                        else
-                        {
-                            LogMessage($"❌ Error processing message: {ex.Message}");
-                        }
+                        LogMessage($"❌ Signal processing error: {ex.Message}");
                     }
                 });
             }
@@ -736,6 +776,203 @@ namespace TelegramEAManager
             catch (Exception ex)
             {
                 LogMessage($"❌ UI update error: {ex.Message}");
+            }
+        }
+        // FIXED: High-performance UI update method
+        private void UpdateUIAfterSignalInternal(ProcessedSignal processedSignal, long channelId, string channelName)
+        {
+            try
+            {
+                // Skip duplicate signals in UI
+                if (processedSignal.Status.Contains("Duplicate"))
+                    return;
+
+                // Add to signals list efficiently
+                lock (allSignals)
+                {
+                    allSignals.Add(processedSignal);
+
+                    // FIXED: Trim old signals more efficiently
+                    if (allSignals.Count > 1000)
+                    {
+                        var toRemove = allSignals.Count - 800;
+                        allSignals.RemoveRange(0, toRemove);
+                    }
+                }
+
+                // FIXED: Batch UI updates
+                if (this.InvokeRequired)
+                {
+                    this.BeginInvoke(new Action(() => {
+                        AddToLiveSignalsFast(processedSignal);
+                        UpdateSelectedChannelSignalCountFast(channelId);
+                        UpdateSignalsCountFast();
+                    }));
+                }
+                else
+                {
+                    AddToLiveSignalsFast(processedSignal);
+                    UpdateSelectedChannelSignalCountFast(channelId);
+                    UpdateSignalsCountFast();
+                }
+
+                // Show notification for processed signals only
+                if (processedSignal.Status.Contains("Processed"))
+                {
+                    ShowNotificationFast($"📊 {processedSignal.ParsedData?.Symbol} {processedSignal.ParsedData?.Direction}");
+                }
+            }
+            catch (Exception ex)
+            {
+                LogMessage($"❌ UI update error: {ex.Message}");
+            }
+        }
+
+        // FIXED: Non-blocking notification system
+        private void ShowNotificationFast(string message)
+        {
+            Task.Run(() =>
+            {
+                try
+                {
+                    // FIXED: Simple, fast notification that doesn't block
+                    if (this.InvokeRequired)
+                    {
+                        this.BeginInvoke(new Action(() => {
+                            // Update title bar for instant feedback
+                            this.Text = $"📊 {message} | Telegram EA Manager - islamahmed9717";
+
+                            // Reset title after 2 seconds
+                            Task.Delay(2000).ContinueWith(_ => {
+                                if (!this.IsDisposed)
+                                {
+                                    try
+                                    {
+                                        this.Invoke(new Action(() => {
+                                            this.Text = "📊 Telegram EA Manager - islamahmed9717 | Real Implementation";
+                                        }));
+                                    }
+                                    catch { }
+                                }
+                            });
+                        }));
+                    }
+                }
+                catch { }
+            });
+        }
+        // FIXED: Efficient signals count update
+        private void UpdateSignalsCountFast()
+        {
+            try
+            {
+                var todaySignals = allSignals.Count(s => s.DateTime.Date == DateTime.Now.Date);
+
+                var lblSignalsCount = this.Controls.Find("lblSignalsCount", true)[0] as Label;
+                if (lblSignalsCount != null)
+                {
+                    lblSignalsCount.Text = $"📊 Today: {todaySignals}";
+                }
+
+                var lblStats = this.Controls.Find("lblStats", true)[0] as Label;
+                if (lblStats != null)
+                {
+                    lblStats.Text = $"📊 ULTRA-FAST | Today: {todaySignals} | Total: {allSignals.Count} | Active: {selectedChannels.Count} channels";
+                }
+            }
+            catch (Exception ex)
+            {
+                LogMessage($"❌ Stats update error: {ex.Message}");
+            }
+        }
+        // FIXED: Ultra-fast live signals display
+        private void AddToLiveSignalsFast(ProcessedSignal signal)
+        {
+            try
+            {
+                var lvLiveSignals = this.Controls.Find("lvLiveSignals", true)[0] as ListView;
+                if (lvLiveSignals == null) return;
+
+                // Skip duplicates and empty signals
+                if (signal.Status.Contains("Duplicate") || signal.ParsedData?.Symbol == null)
+                    return;
+
+                // FIXED: Batch UI updates to prevent flickering
+                lvLiveSignals.BeginUpdate();
+
+                var localTime = signal.DateTime.ToLocalTime();
+                var item = new ListViewItem(localTime.ToString("HH:mm:ss"));
+                item.SubItems.Add(signal.ChannelName);
+                item.SubItems.Add(signal.ParsedData?.Symbol ?? "N/A");
+                item.SubItems.Add(signal.ParsedData?.Direction ?? "N/A");
+                item.SubItems.Add(signal.ParsedData?.StopLoss > 0 ? signal.ParsedData.StopLoss.ToString("F5") : "N/A");
+                item.SubItems.Add(signal.ParsedData?.TakeProfit1 > 0 ? signal.ParsedData.TakeProfit1.ToString("F5") : "N/A");
+                item.SubItems.Add(signal.Status);
+
+                // FIXED: Color coding with better performance
+                if (signal.Status.Contains("Processed"))
+                    item.BackColor = Color.FromArgb(220, 255, 220);
+                else if (signal.Status.Contains("Error") || signal.Status.Contains("Invalid"))
+                    item.BackColor = Color.FromArgb(255, 220, 220);
+                else if (signal.Status.Contains("Test"))
+                    item.BackColor = Color.FromArgb(220, 220, 255);
+
+                lvLiveSignals.Items.Insert(0, item);
+
+                // FIXED: Efficient trimming - keep only last 30 items
+                while (lvLiveSignals.Items.Count > 30)
+                {
+                    lvLiveSignals.Items.RemoveAt(lvLiveSignals.Items.Count - 1);
+                }
+
+                lvLiveSignals.EndUpdate();
+            }
+            catch (Exception ex)
+            {
+                LogMessage($"❌ Live signals update error: {ex.Message}");
+            }
+        }
+
+        // FIXED: Fast channel signal count update
+        private void UpdateSelectedChannelSignalCountFast(long channelId)
+        {
+            try
+            {
+                var lvSelected = this.Controls.Find("lvSelected", true).FirstOrDefault() as ListView;
+                if (lvSelected == null) return;
+
+                // FIXED: Find and update specific channel only
+                foreach (ListViewItem item in lvSelected.Items)
+                {
+                    var channel = item.Tag as ChannelInfo;
+                    if (channel?.Id == channelId && item.SubItems.Count > 2)
+                    {
+                        var signalsFromChannel = allSignals.Count(s => s.ChannelId == channelId);
+                        item.SubItems[2].Text = signalsFromChannel.ToString();
+
+                        // FIXED: Quick visual feedback
+                        item.BackColor = Color.FromArgb(200, 255, 200);
+
+                        // Reset color asynchronously
+                        Task.Delay(500).ContinueWith(_ => {
+                            if (!item.ListView?.IsDisposed == true)
+                            {
+                                try
+                                {
+                                    item.ListView.Invoke(new Action(() => {
+                                        item.BackColor = Color.FromArgb(220, 255, 220);
+                                    }));
+                                }
+                                catch { }
+                            }
+                        });
+                        break;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                LogMessage($"❌ Channel count update error: {ex.Message}");
             }
         }
         private void UpdateAfterNewSignal(ProcessedSignal processedSignal, long channelId)
@@ -1938,8 +2175,7 @@ TP2: 1.0950";
         {
             if (selectedChannels.Count == 0)
             {
-                ShowMessage("⚠️ Please select at least one channel to monitor!",
-                           "No Channels Selected", MessageBoxIcon.Warning);
+                ShowMessage("⚠️ Please select at least one channel to monitor!", "No Channels Selected", MessageBoxIcon.Warning);
                 return;
             }
 
@@ -1948,14 +2184,22 @@ TP2: 1.0950";
 
             if (string.IsNullOrEmpty(mt4Path) || !Directory.Exists(mt4Path))
             {
-                ShowMessage("❌ Please set a valid MT4/MT5 Files folder path!",
-                           "Invalid Path", MessageBoxIcon.Warning);
+                ShowMessage("❌ Please set a valid MT4/MT5 Files folder path!", "Invalid Path", MessageBoxIcon.Warning);
                 return;
             }
 
             try
             {
-                // Clean up old signals first
+                // FIXED: Verify Telegram connection first
+                if (!telegramService.IsUserAuthorized())
+                {
+                    ShowMessage("❌ Telegram connection lost! Please reconnect first.", "Connection Lost", MessageBoxIcon.Error);
+                    return;
+                }
+
+                LogMessage("🚀 Starting ULTRA-FAST monitoring mode...");
+
+                // Clean up old signals
                 signalProcessor.CleanupProcessedSignals();
 
                 // Update EA settings
@@ -1970,7 +2214,8 @@ TP2: 1.0950";
                 // Start file monitoring
                 StartSignalFileMonitoring(mt4Path);
 
-                // Start real Telegram monitoring
+                // FIXED: Start ultra-fast Telegram monitoring
+                LogMessage("⚡ Activating 500ms ultra-fast polling...");
                 telegramService.StartMonitoring(selectedChannels);
 
                 // Update state
@@ -1983,21 +2228,22 @@ TP2: 1.0950";
                 if (btnStop != null) btnStop.Enabled = true;
 
                 UpdateStatus(true, true);
+                UpdateSelectedChannelsStatus("📊 ULTRA-FAST Live");
 
-                // Update selected channels to show "Live" status
-                UpdateSelectedChannelsStatus("📊 Live");
-                UpdateSelectedChannelsSignalCounts(); // Add this new method
-
-                ShowMessage($"✅ Monitoring started successfully!\n\n" +
+                ShowMessage($"✅ ULTRA-FAST monitoring started!\n\n" +
+                           $"⚡ Polling every 500ms for instant detection\n" +
                            $"📊 Monitoring {selectedChannels.Count} channels\n" +
-                           $"📁 Signals saved to: {mt4Path}\\telegram_signals.txt\n" +
-                           $"🔄 Real-time message processing active\n" +
-                           $"🧹 Auto-cleanup enabled (every 5 minutes)\n\n" +
-                           $"⚠️ Keep this application running!",
-                           "Monitoring Started", MessageBoxIcon.Information);
+                           $"📁 Signals: {mt4Path}\\telegram_signals.txt\n" +
+                           $"🔄 Background processing active\n" +
+                           $"🧹 Auto-cleanup enabled\n\n" +
+                           $"🚀 Maximum speed mode activated!",
+                           "Ultra-Fast Monitoring Active", MessageBoxIcon.Information);
+
+                LogMessage("✅ ULTRA-FAST monitoring mode activated - signals will be detected within 500ms!");
             }
             catch (Exception ex)
             {
+                LogMessage($"❌ Failed to start ultra-fast monitoring: {ex.Message}");
                 ShowMessage($"❌ Failed to start monitoring:\n\n{ex.Message}", "Monitoring Error", MessageBoxIcon.Error);
             }
         }
@@ -2219,39 +2465,40 @@ TP 149.50"
         {
             try
             {
-                // Stop all timers
+                LogMessage("🔄 Stopping ultra-fast mode...");
+
+                // Stop ultra-fast processing
+                uiProcessingTimer?.Stop();
+                uiProcessingTimer?.Dispose();
+
+                // Stop all other timers
                 uiUpdateTimer?.Stop();
                 uiUpdateTimer?.Dispose();
-
                 cleanupTimer?.Stop();
                 cleanupTimer?.Dispose();
-
                 uiCleanupTimer?.Change(Timeout.Infinite, Timeout.Infinite);
                 uiCleanupTimer?.Dispose();
 
-                // Stop file monitoring
+                // Stop monitoring
                 StopSignalFileMonitoring();
-
-                // Stop telegram monitoring
                 telegramService?.StopMonitoring();
                 telegramService?.Dispose();
 
-                // Dispose semaphores
+                // Dispose resources
                 uiUpdateSemaphore?.Dispose();
-
-                // Clear collections
                 recentSignalsInUI?.Clear();
                 allSignals?.Clear();
                 selectedChannels?.Clear();
 
-                // Force garbage collection
+                LogMessage("✅ Ultra-fast mode stopped successfully");
+
+                // Force cleanup
                 GC.Collect();
                 GC.WaitForPendingFinalizers();
             }
             catch (Exception ex)
             {
-                // Log error but don't throw
-                Console.WriteLine($"Error during cleanup: {ex.Message}");
+                Console.WriteLine($"Cleanup error: {ex.Message}");
             }
 
             base.OnFormClosing(e);
@@ -2484,28 +2731,103 @@ TP 149.50"
         {
             try
             {
-                // FIXED: Prevent timer accumulation
                 var timer = sender as System.Windows.Forms.Timer;
-                if (timer != null)
+                timer?.Stop(); // Prevent overlapping updates
+
+                // FIXED: Quick updates only
+                UpdateTimeDisplaysFast();
+            
+                connectionCheckCounter++;
+
+                if (connectionCheckCounter >= 30) // Check every 30 seconds
                 {
-                    timer.Stop(); // Stop timer during processing
+                    connectionCheckCounter = 0;
+                    CheckConnectionStatusFast();
                 }
 
-                // Quick UI updates only
-                UpdateTimeDisplays();
-                UpdateSignalsCount();
-
-                // FIXED: Restart timer after processing
-                if (timer != null)
-                {
-                    timer.Start();
-                }
+                timer?.Start();
             }
             catch (Exception ex)
             {
                 LogMessage($"❌ Timer error: {ex.Message}");
             }
         }
+
+        // FIXED: Fast time display updates
+        private void UpdateTimeDisplaysFast()
+        {
+            try
+            {
+                var lblSubtitle = this.Controls.Find("lblSubtitle", true).FirstOrDefault() as Label;
+                if (lblSubtitle != null)
+                {
+                    var utcTime = DateTime.UtcNow;
+                    lblSubtitle.Text = $"🕒 UTC: {utcTime:HH:mm:ss} | ULTRA-FAST Mode | User: islamahmed9717";
+                }
+            }
+            catch { }
+        }
+        // FIXED: Fast connection status check
+        private void CheckConnectionStatusFast()
+        {
+            try
+            {
+                bool isConnected = telegramService?.IsUserAuthorized() ?? false;
+
+                if (isMonitoring && !isConnected)
+                {
+                    LogMessage("⚠️ Connection lost during monitoring! Attempting recovery...");
+
+                    // Try to recover connection
+                    Task.Run(async () =>
+                    {
+                        try
+                        {
+                            var phoneNumber = GetSavedPhoneNumber();
+                            if (!string.IsNullOrEmpty(phoneNumber))
+                            {
+                                var reconnected = await telegramService.ConnectAsync(phoneNumber);
+                                if (reconnected)
+                                {
+                                    LogMessage("✅ Connection recovered automatically!");
+
+                                    // Restart monitoring
+                                    if (this.InvokeRequired)
+                                    {
+                                        this.BeginInvoke(new Action(() => {
+                                            telegramService.StartMonitoring(selectedChannels);
+                                            LogMessage("🔄 Monitoring restarted after recovery");
+                                        }));
+                                    }
+                                }
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            LogMessage($"❌ Auto-recovery failed: {ex.Message}");
+                        }
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                LogMessage($"❌ Connection check error: {ex.Message}");
+            }
+        }
+        // FIXED: Get saved phone number for auto-recovery
+        private string GetSavedPhoneNumber()
+        {
+            try
+            {
+                var cmbPhone = this.Controls.Find("cmbPhone", true)[0] as ComboBox;
+                return cmbPhone?.Text?.Trim() ?? "";
+            }
+            catch
+            {
+                return "";
+            }
+        }
+
         private void UpdateTimeDisplays()
         {
             try
@@ -3342,4 +3664,5 @@ System: Windows Forms .NET 9.0 with WTelegramClient
 
         #endregion
     }
+    #endregion
 }
