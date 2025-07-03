@@ -55,6 +55,7 @@ namespace TelegramEAManager
         {
             InitializeComponent();
             InitializeServices();
+            signalProcessor.ClearSignalFileOnStartup();
             SetupUI();
             LoadApplicationSettings();
             SetupTimers();

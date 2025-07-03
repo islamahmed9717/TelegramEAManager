@@ -146,7 +146,7 @@ namespace TelegramEAManager
         }
 
         // FIXED: Clear signal file on startup with better performance
-        private void ClearSignalFileOnStartup()
+        public void ClearSignalFileOnStartup()
         {
             try
             {
@@ -277,6 +277,13 @@ namespace TelegramEAManager
         {
             try
             {
+                // Only write signals less than 5 minutes old
+                if ((DateTime.Now - signal.DateTime).TotalMinutes > 3)
+                {
+                    OnDebugMessage($"⏳ Skipped writing old signal: {signal.ParsedData?.Symbol} (age: {(DateTime.Now - signal.DateTime).TotalMinutes:F1} min)");
+                    return;
+                }
+
                 var signalText = FormatSignalForEA(signal);
                 writeQueue.Enqueue(signalText);
 
@@ -287,6 +294,7 @@ namespace TelegramEAManager
                 OnErrorOccurred($"Error queuing signal: {ex.Message}");
             }
         }
+
 
         // FIXED: Optimized signal formatting
         private string FormatSignalForEA(ProcessedSignal signal)
