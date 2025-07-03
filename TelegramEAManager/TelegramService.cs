@@ -58,26 +58,38 @@ namespace TelegramEAManager
         {
             Task.Run(async () =>
             {
+                OnDebugMessage("🚀 Starting FRESH message processor...");
+
                 while (true)
                 {
                     try
                     {
                         if (messageQueue.TryDequeue(out var messageData))
                         {
-                            // Process message immediately without blocking polling
-                            OnDebugMessage($"Processing queued message from {messageData.channelName}");
-                            NewMessageReceived?.Invoke(this, messageData);
+                            // Calculate processing delay
+                            var processingDelay = DateTime.UtcNow - messageData.messageTime;
+
+                            // Only process if delay is reasonable (under 30 seconds)
+                            if (processingDelay.TotalSeconds <= 30)
+                            {
+                                OnDebugMessage($"⚡ Processing FRESH message from {messageData.channelName} (delay: {processingDelay.TotalSeconds:F1}s)");
+                                NewMessageReceived?.Invoke(this, messageData);
+                            }
+                            else
+                            {
+                                OnDebugMessage($"🚫 REJECTING OLD message from {messageData.channelName} (delay: {processingDelay.TotalSeconds:F0}s)");
+                            }
                         }
                         else
                         {
-                            // No messages to process, wait a bit
-                            await Task.Delay(10); // Very short delay for responsiveness
+                            // No messages to process, very short wait
+                            await Task.Delay(10); // Ultra-responsive processing
                         }
                     }
                     catch (Exception ex)
                     {
                         OnErrorOccurred($"Message processor error: {ex.Message}");
-                        await Task.Delay(1000); // Wait before retrying
+                        await Task.Delay(1000); // Wait before retrying on error
                     }
                 }
             });
@@ -624,6 +636,8 @@ namespace TelegramEAManager
             try
             {
                 var lastKnownId = lastMessageIds.GetValueOrDefault(channelId, 0);
+                var currentUtc = DateTime.UtcNow;
+
                 var newMessages = history.Messages.OfType<TL.Message>()
                     .Where(m => m.ID > lastKnownId && !string.IsNullOrEmpty(m.message))
                     .OrderBy(m => m.ID)
@@ -631,13 +645,20 @@ namespace TelegramEAManager
 
                 foreach (var message in newMessages)
                 {
-                    // FIXED: Immediate queuing for ultra-fast processing
-                    var messageData = (message.message, channelId, sourceName, DateTime.UtcNow);
+                    // CRITICAL: Use CURRENT UTC time, not message timestamp
+                    // This ensures all signals are processed as "fresh" when detected
+                    var messageData = (
+                        message.message,
+                        channelId,
+                        sourceName,
+                        currentUtc  // ALWAYS use current UTC time for freshness
+                    );
+
                     messageQueue.Enqueue(messageData);
 
                     lastMessageIds.AddOrUpdate(channelId, message.ID, (key, oldValue) => Math.Max(oldValue, message.ID));
 
-                    OnDebugMessage($"⚡ INSTANT: New message in {sourceName} (ID: {message.ID})");
+                    OnDebugMessage($"⚡ FRESH MESSAGE QUEUED: {sourceName} (ID: {message.ID}) at {currentUtc:HH:mm:ss.fff} UTC");
                 }
             }
             catch (Exception ex)

@@ -55,7 +55,6 @@ namespace TelegramEAManager
         {
             InitializeComponent();
             InitializeServices();
-            signalProcessor.ClearSignalFileOnStartup();
             SetupUI();
             LoadApplicationSettings();
             SetupTimers();
@@ -868,17 +867,19 @@ namespace TelegramEAManager
             try
             {
                 var todaySignals = allSignals.Count(s => s.DateTime.Date == DateTime.Now.Date);
+                var freshSignals = allSignals.Count(s => s.Status.Contains("PROCESSED"));
+                var rejectedOld = allSignals.Count(s => s.Status.Contains("Too old"));
 
                 var lblSignalsCount = this.Controls.Find("lblSignalsCount", true)[0] as Label;
                 if (lblSignalsCount != null)
                 {
-                    lblSignalsCount.Text = $"📊 Today: {todaySignals}";
+                    lblSignalsCount.Text = $"📊 Fresh: {freshSignals}";
                 }
 
                 var lblStats = this.Controls.Find("lblStats", true)[0] as Label;
                 if (lblStats != null)
                 {
-                    lblStats.Text = $"📊 ULTRA-FAST | Today: {todaySignals} | Total: {allSignals.Count} | Active: {selectedChannels.Count} channels";
+                    lblStats.Text = $"📊 FRESH SIGNALS ONLY | Today: {todaySignals} | Fresh: {freshSignals} | Rejected Old: {rejectedOld} | Active: {selectedChannels.Count} channels";
                 }
             }
             catch (Exception ex)
@@ -886,7 +887,9 @@ namespace TelegramEAManager
                 LogMessage($"❌ Stats update error: {ex.Message}");
             }
         }
+
         // FIXED: Ultra-fast live signals display
+        // ENHANCED: Add fresh signal to live display with age info
         private void AddToLiveSignalsFast(ProcessedSignal signal)
         {
             try
@@ -894,39 +897,63 @@ namespace TelegramEAManager
                 var lvLiveSignals = this.Controls.Find("lvLiveSignals", true)[0] as ListView;
                 if (lvLiveSignals == null) return;
 
+                // Skip old/rejected signals in UI
+                if (signal.Status.Contains("Too old") || signal.Status.Contains("REJECTED"))
+                {
+                    LogMessage($"🚫 Skipping old signal in UI: {signal.ParsedData?.Symbol} - {signal.Status}");
+                    return;
+                }
+
                 // Skip duplicates and empty signals
                 if (signal.Status.Contains("Duplicate") || signal.ParsedData?.Symbol == null)
                     return;
 
-                // FIXED: Batch UI updates to prevent flickering
                 lvLiveSignals.BeginUpdate();
 
                 var localTime = signal.DateTime.ToLocalTime();
+                var age = (DateTime.UtcNow - signal.DateTime).TotalSeconds;
+
                 var item = new ListViewItem(localTime.ToString("HH:mm:ss"));
                 item.SubItems.Add(signal.ChannelName);
                 item.SubItems.Add(signal.ParsedData?.Symbol ?? "N/A");
                 item.SubItems.Add(signal.ParsedData?.Direction ?? "N/A");
                 item.SubItems.Add(signal.ParsedData?.StopLoss > 0 ? signal.ParsedData.StopLoss.ToString("F5") : "N/A");
                 item.SubItems.Add(signal.ParsedData?.TakeProfit1 > 0 ? signal.ParsedData.TakeProfit1.ToString("F5") : "N/A");
-                item.SubItems.Add(signal.Status);
 
-                // FIXED: Color coding with better performance
-                if (signal.Status.Contains("Processed"))
-                    item.BackColor = Color.FromArgb(220, 255, 220);
+                // Enhanced status with age information
+                var statusWithAge = $"{signal.Status} ({age:F0}s)";
+                item.SubItems.Add(statusWithAge);
+
+                // ENHANCED: Color coding based on freshness and status
+                if (signal.Status.Contains("PROCESSED"))
+                {
+                    if (age <= 30) // Very fresh
+                        item.BackColor = Color.FromArgb(144, 238, 144); // Light green
+                    else if (age <= 60) // Fresh
+                        item.BackColor = Color.FromArgb(220, 255, 220); // Lighter green
+                    else // Older but still processed
+                        item.BackColor = Color.FromArgb(255, 255, 200); // Light yellow
+                }
                 else if (signal.Status.Contains("Error") || signal.Status.Contains("Invalid"))
-                    item.BackColor = Color.FromArgb(255, 220, 220);
+                    item.BackColor = Color.FromArgb(255, 220, 220); // Light red
                 else if (signal.Status.Contains("Test"))
-                    item.BackColor = Color.FromArgb(220, 220, 255);
+                    item.BackColor = Color.FromArgb(220, 220, 255); // Light blue
 
                 lvLiveSignals.Items.Insert(0, item);
 
-                // FIXED: Efficient trimming - keep only last 30 items
-                while (lvLiveSignals.Items.Count > 30)
+                // Keep only last 50 items for performance
+                while (lvLiveSignals.Items.Count > 50)
                 {
                     lvLiveSignals.Items.RemoveAt(lvLiveSignals.Items.Count - 1);
                 }
 
                 lvLiveSignals.EndUpdate();
+
+                // Log fresh signal processing
+                if (signal.Status.Contains("PROCESSED"))
+                {
+                    LogMessage($"✅ FRESH SIGNAL ADDED: {signal.ParsedData?.Symbol} {signal.ParsedData?.Direction} (age: {age:F0}s)");
+                }
             }
             catch (Exception ex)
             {

@@ -29,6 +29,10 @@ namespace TelegramEAManager
         private readonly System.Threading.Timer? flushTimer;
         private volatile bool isProcessing = false;
 
+        private readonly int MaxSignalAgeSeconds = 300; // 5 minutes max age
+        private readonly int SignalGracePeriodSeconds = 30; // Grace period for processing
+        private readonly bool StrictFreshnessMode = true; // Reject even slightly old signals
+
         // Events
         public event EventHandler<ProcessedSignal>? SignalProcessed;
         public event EventHandler<string>? ErrorOccurred;
@@ -146,7 +150,8 @@ namespace TelegramEAManager
         }
 
         // FIXED: Clear signal file on startup with better performance
-        public void ClearSignalFileOnStartup()
+        // ENHANCED: Clear old signal file and set up fresh monitoring
+        private void ClearSignalFileOnStartup()
         {
             try
             {
@@ -160,32 +165,82 @@ namespace TelegramEAManager
                         Directory.CreateDirectory(directory);
                     }
 
-                    // FIXED: Write header with current time
+                    // ENHANCED: Write fresh header with current UTC time
                     var headerContent = new StringBuilder();
-                    headerContent.AppendLine("# Telegram EA Signal File - ULTRA-FAST VERSION");
-                    headerContent.AppendLine($"# Startup Time: {DateTime.Now:yyyy.MM.dd HH:mm:ss} LOCAL");
-                    headerContent.AppendLine($"# Processing Mode: ULTRA-FAST (500ms polling)");
+                    headerContent.AppendLine("# Telegram EA Signal File - FRESH SIGNALS ONLY");
+                    headerContent.AppendLine($"# Started: {DateTime.UtcNow:yyyy.MM.dd HH:mm:ss} UTC");
+                    headerContent.AppendLine($"# Max Signal Age: {MaxSignalAgeSeconds} seconds");
+                    headerContent.AppendLine($"# Grace Period: {SignalGracePeriodSeconds} seconds");
+                    headerContent.AppendLine($"# Strict Mode: {(StrictFreshnessMode ? "ENABLED" : "DISABLED")}");
+                    headerContent.AppendLine("# Processing Mode: LIVE FRESH SIGNALS ONLY");
                     headerContent.AppendLine("# Format: TIMESTAMP|CHANNEL_ID|CHANNEL_NAME|DIRECTION|SYMBOL|ENTRY|SL|TP1|TP2|TP3|STATUS");
-                    headerContent.AppendLine("# Status values: NEW (ready to process), PROCESSED (already handled)");
+                    headerContent.AppendLine("# All timestamps are FRESH and in UTC");
                     headerContent.AppendLine("");
 
                     File.WriteAllText(filePath, headerContent.ToString());
-                    OnDebugMessage("✅ Signal file initialized for ultra-fast processing");
+                    OnDebugMessage("✅ Fresh signal file initialized - only live signals will be written");
                 }
             }
             catch (Exception ex)
             {
-                OnErrorOccurred($"Failed to initialize signal file: {ex.Message}");
+                OnErrorOccurred($"Failed to initialize fresh signal file: {ex.Message}");
             }
         }
 
+
+        // ENHANCED: Periodic cleanup of old processed signals from memory
+        public void CleanupOldProcessedSignals()
+        {
+            try
+            {
+                var cutoffTime = DateTime.UtcNow.AddMinutes(-10); // Keep only last 10 minutes
+                var keysToRemove = processedMessageHashes
+                    .Where(kvp => kvp.Value < cutoffTime)
+                    .Select(kvp => kvp.Key)
+                    .ToList();
+
+                foreach (var key in keysToRemove)
+                {
+                    processedMessageHashes.TryRemove(key, out _);
+                }
+
+                if (keysToRemove.Count > 0)
+                {
+                    OnDebugMessage($"🧹 Cleaned {keysToRemove.Count} old processed signal hashes");
+                }
+            }
+            catch (Exception ex)
+            {
+                OnErrorOccurred($"Cleanup error: {ex.Message}");
+            }
+        }
+
+        // ADD THIS METHOD: Get fresh signals statistics
+        public (int TotalProcessed, int FreshSignals, int RejectedOld, double AverageAge) GetFreshSignalsStats()
+        {
+            var totalProcessed = processedSignals.Count;
+            var freshSignals = processedSignals.Count(s => s.Status.Contains("PROCESSED"));
+            var rejectedOld = processedSignals.Count(s => s.Status.Contains("Too old"));
+
+            var avgAge = processedSignals
+                .Where(s => s.Status.Contains("PROCESSED"))
+                .Select(s => (DateTime.UtcNow - s.DateTime).TotalSeconds)
+                .DefaultIfEmpty(0)
+                .Average();
+
+            return (totalProcessed, freshSignals, rejectedOld, avgAge);
+        }
+
+
+
         // FIXED: Ultra-fast signal processing with immediate queuing
+        // ENHANCED: Ultra-fast signal processing with STRICT freshness control
         public ProcessedSignal ProcessTelegramMessage(string messageText, long channelId, string channelName)
         {
             var signal = new ProcessedSignal
             {
                 Id = Guid.NewGuid().ToString(),
-                DateTime = DateTime.Now,
+                DateTime = DateTime.UtcNow, // ALWAYS USE UTC for consistency
                 ChannelId = channelId,
                 ChannelName = channelName,
                 OriginalText = messageText,
@@ -194,30 +249,44 @@ namespace TelegramEAManager
 
             try
             {
-                // FIXED: Fast duplicate check with timeout
+                // STEP 1: IMMEDIATE FRESHNESS CHECK
+                var messageAge = CalculateMessageAge(signal.DateTime);
+
+                if (!IsSignalFresh(messageAge))
+                {
+                    signal.Status = $"REJECTED - Too old ({messageAge.TotalSeconds:F0} seconds)";
+                    OnDebugMessage($"🚫 REJECTED OLD SIGNAL: Age = {messageAge.TotalSeconds:F0}s (Max: {MaxSignalAgeSeconds}s)");
+                    return signal; // Return rejected signal, don't process further
+                }
+
+                OnDebugMessage($"✅ FRESH SIGNAL: Age = {messageAge.TotalSeconds:F0}s - Processing...");
+
+                // STEP 2: FAST DUPLICATE CHECK (only for fresh signals)
                 var messageHash = GenerateMessageHash(messageText, channelId);
 
                 if (processedMessageHashes.TryGetValue(messageHash, out DateTime processedTime))
                 {
-                    if ((DateTime.Now - processedTime).TotalMinutes < 2) // Reduced from 5 to 2 minutes
+                    var timeSinceProcessed = DateTime.UtcNow - processedTime;
+                    if (timeSinceProcessed.TotalMinutes < 2) // Reduced duplicate window
                     {
-                        signal.Status = "Duplicate - Already processed recently";
+                        signal.Status = "DUPLICATE - Already processed recently";
+                        OnDebugMessage($"🔄 DUPLICATE SIGNAL detected - processed {timeSinceProcessed.TotalSeconds:F0}s ago");
                         return signal;
                     }
                 }
 
-                // Mark as processed immediately
-                processedMessageHashes[messageHash] = DateTime.Now;
+                // Mark as processed immediately (for fresh signals only)
+                processedMessageHashes[messageHash] = DateTime.UtcNow;
 
-                // FIXED: Parse signal with timeout protection
+                // STEP 3: PARSE SIGNAL (only fresh, non-duplicate signals)
                 var parseTask = Task.Run(() => ParseTradingSignal(messageText));
-                var parsedData = parseTask.Wait(2000) ? parseTask.Result : null; // 2 second timeout
+                var parsedData = parseTask.Wait(2000) ? parseTask.Result : null;
 
                 if (parsedData != null)
                 {
                     signal.ParsedData = parsedData;
 
-                    // FIXED: Apply mapping in background to avoid blocking
+                    // STEP 4: BACKGROUND PROCESSING FOR VALIDATED FRESH SIGNALS
                     Task.Run(() =>
                     {
                         try
@@ -226,11 +295,10 @@ namespace TelegramEAManager
 
                             if (ValidateSignal(signal.ParsedData))
                             {
-                                // FIXED: Queue for immediate writing instead of blocking
+                                // ONLY WRITE FRESH, VALIDATED SIGNALS TO FILE
                                 QueueSignalForWriting(signal);
-                                signal.Status = "Processed - Queued for EA";
+                                signal.Status = "PROCESSED - Fresh signal written to EA";
 
-                                // Add to processed signals
                                 processedSignals.Enqueue(signal);
 
                                 // Trim queue if too large
@@ -243,34 +311,46 @@ namespace TelegramEAManager
                                 }
 
                                 OnSignalProcessed(signal);
-                                OnDebugMessage($"⚡ ULTRA-FAST: Signal {signal.ParsedData.Symbol} {signal.ParsedData.Direction} processed in milliseconds");
+                                OnDebugMessage($"⚡ FRESH SIGNAL PROCESSED: {signal.ParsedData.Symbol} {signal.ParsedData.Direction} - Age: {messageAge.TotalSeconds:F0}s");
                             }
                             else
                             {
-                                signal.Status = "Invalid - Missing required data";
+                                signal.Status = "INVALID - Missing required data";
+                                OnDebugMessage($"❌ Fresh signal failed validation: {signal.ParsedData?.Symbol}");
                             }
                         }
                         catch (Exception ex)
                         {
-                            signal.Status = $"Error - {ex.Message}";
+                            signal.Status = $"ERROR - {ex.Message}";
                             OnErrorOccurred($"Background processing error: {ex.Message}");
                         }
                     });
                 }
                 else
                 {
-                    signal.Status = "No trading signal detected";
+                    signal.Status = "NO SIGNAL - No trading pattern detected";
+                    OnDebugMessage($"📝 No trading signal found in message from {channelName}");
                 }
             }
             catch (Exception ex)
             {
-                signal.Status = $"Error - {ex.Message}";
+                signal.Status = $"ERROR - {ex.Message}";
                 signal.ErrorMessage = ex.ToString();
                 OnErrorOccurred($"Error processing signal: {ex.Message}");
             }
 
             return signal;
         }
+        private TimeSpan CalculateMessageAge(DateTime signalTime)
+        {
+            var currentTime = DateTime.UtcNow;
+            var age = currentTime - signalTime;
+
+            OnDebugMessage($"⏱️ Age calculation: Signal={signalTime:HH:mm:ss.fff}, Current={currentTime:HH:mm:ss.fff}, Age={age.TotalSeconds:F1}s");
+
+            return age;
+        }
+
 
         // FIXED: Queue signal for ultra-fast writing
         private void QueueSignalForWriting(ProcessedSignal signal)
@@ -293,6 +373,39 @@ namespace TelegramEAManager
             {
                 OnErrorOccurred($"Error queuing signal: {ex.Message}");
             }
+        }
+        private bool IsSignalFresh(TimeSpan messageAge)
+        {
+            // Handle negative ages (future signals - usually timezone issues)
+            if (messageAge.TotalSeconds < -60) // More than 1 minute in future = suspicious
+            {
+                OnDebugMessage($"⚠️ FUTURE SIGNAL detected: {Math.Abs(messageAge.TotalSeconds):F0}s in future - REJECTED");
+                return false;
+            }
+
+            // Allow slight future signals (up to 60 seconds) due to clock differences
+            if (messageAge.TotalSeconds < 0)
+            {
+                OnDebugMessage($"🕐 Slight future signal: {Math.Abs(messageAge.TotalSeconds):F0}s - Treating as fresh");
+                return true;
+            }
+
+            // Strict mode: reject anything older than grace period
+            if (StrictFreshnessMode && messageAge.TotalSeconds > SignalGracePeriodSeconds)
+            {
+                OnDebugMessage($"🚫 STRICT MODE: Signal age {messageAge.TotalSeconds:F0}s > grace period {SignalGracePeriodSeconds}s");
+                return false;
+            }
+
+            // Normal mode: check against maximum age
+            var isFresh = messageAge.TotalSeconds <= MaxSignalAgeSeconds;
+
+            if (!isFresh)
+            {
+                OnDebugMessage($"🚫 OLD SIGNAL: Age {messageAge.TotalSeconds:F0}s > max {MaxSignalAgeSeconds}s");
+            }
+
+            return isFresh;
         }
 
 
