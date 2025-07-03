@@ -690,30 +690,6 @@ namespace TelegramEAManager
             }
         }
 
-
-        // ENHANCED: Extract all price levels with comprehensive patterns
-        private static readonly Regex[] PricePatterns = {
-    // Stop Loss patterns
-    new Regex(@"(?:SL|S\.L|STOP\s*LOSS|STOPLOSS)\s*[:=@]?\s*(\d+\.?\d*)", RegexOptions.Compiled | RegexOptions.IgnoreCase),
-    new Regex(@"(?:STOP|STP)\s*[:=@]?\s*(\d+\.?\d*)", RegexOptions.Compiled | RegexOptions.IgnoreCase),
-    
-    // Take Profit patterns
-    new Regex(@"(?:TP\s*1?|T\.P\.?\s*1?|TAKE\s*PROFIT\s*1?)\s*[:=@]?\s*(\d+\.?\d*)", RegexOptions.Compiled | RegexOptions.IgnoreCase),
-    new Regex(@"(?:TP\s*2|T\.P\.?\s*2|TAKE\s*PROFIT\s*2)\s*[:=@]?\s*(\d+\.?\d*)", RegexOptions.Compiled | RegexOptions.IgnoreCase),
-    new Regex(@"(?:TP\s*3|T\.P\.?\s*3|TAKE\s*PROFIT\s*3)\s*[:=@]?\s*(\d+\.?\d*)", RegexOptions.Compiled | RegexOptions.IgnoreCase),
-    
-    // Entry patterns
-    new Regex(@"(?:ENTRY|ENT|@|AT)\s*[:=@]?\s*(\d+\.?\d*)", RegexOptions.Compiled | RegexOptions.IgnoreCase),
-    new Regex(@"(?:BUY|SELL)\s+(?:AT\s+)?(\d+\.?\d*)", RegexOptions.Compiled | RegexOptions.IgnoreCase),
-    
-    // Target patterns
-    new Regex(@"(?:TARGET|TGT|TARG)\s*[:=@]?\s*(\d+\.?\d*)", RegexOptions.Compiled | RegexOptions.IgnoreCase),
-    
-    // Generic price patterns
-    new Regex(@"(\d{1,6}\.\d{2,5})", RegexOptions.Compiled), // Price format like 1.08450
-    new Regex(@"(\d{2,6}\.?\d{0,3})", RegexOptions.Compiled)  // Price format like 1950 or 1950.50
-};
-
         // ENHANCED: Context-based symbol extraction
         private string ExtractSymbolFromContext(string text, string direction)
         {
