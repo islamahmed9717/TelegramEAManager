@@ -868,11 +868,11 @@ namespace TelegramEAManager
             {
                 var now = DateTime.UtcNow;
 
+                // Get fresh signal statistics
+                var stats = signalProcessor.GetFreshSignalsStats();
+
                 // Only count signals from the last 60 seconds
-                var freshSignals = allSignals.Where(s =>
-                    s.Status.Contains("PROCESSED") &&
-                    (now - s.DateTime).TotalSeconds <= 60
-                ).Count();
+                var freshSignals = stats.FreshSignals;
 
                 // Count today's fresh signals
                 var todaysFreshSignals = allSignals.Where(s =>
@@ -882,10 +882,7 @@ namespace TelegramEAManager
                 ).Count();
 
                 // Count rejected old signals
-                var rejectedOld = allSignals.Count(s =>
-                    s.Status.Contains("Too old") ||
-                    s.Status.Contains("REJECTED")
-                );
+                var rejectedOld = stats.RejectedOld;
 
                 var lblSignalsCount = this.Controls.Find("lblSignalsCount", true)[0] as Label;
                 if (lblSignalsCount != null)
@@ -897,7 +894,7 @@ namespace TelegramEAManager
                 var lblStats = this.Controls.Find("lblStats", true)[0] as Label;
                 if (lblStats != null)
                 {
-                    lblStats.Text = $"⚡ FRESH SIGNALS ONLY | Live Now: {freshSignals} | Today's Fresh: {todaysFreshSignals} | Rejected Old: {rejectedOld} | Channels: {selectedChannels.Count}";
+                    lblStats.Text = $"⚡ FRESH SIGNALS ONLY | Live Now: {freshSignals} | Today's Fresh: {todaysFreshSignals} | Rejected Old: {rejectedOld} | Channels: {selectedChannels.Count} | Avg Age: {stats.AverageAge:F1}s";
                 }
             }
             catch (Exception ex)
@@ -923,7 +920,8 @@ namespace TelegramEAManager
                     signal.Status.Contains("Error") ||
                     signal.ParsedData?.Symbol == null)
                 {
-                    OnDebugMessage($"🚫 Skipping non-fresh signal in UI: {signal.ParsedData?.Symbol} - {signal.Status}");
+                    // OnDebugMessage($"🚫 Skipping non-fresh signal in UI: {signal.ParsedData?.Symbol} - {signal.Status}");
+                    LogDebugMessage($"🚫 Skipping non-fresh signal in UI: {signal.ParsedData?.Symbol} - {signal.Status}");
                     return;
                 }
 
@@ -2176,44 +2174,7 @@ TP2: 1.0950";
             }
         }
         // FIXED: Update comment to show fresh signals only
-        private void UpdateComment()
-        {
-            string comment = "📱 TELEGRAM EA MANAGER - FRESH SIGNALS ONLY\n";
-            comment += "════════════════════════════════════════════\n";
-            comment += "👤 Developer: islamahmed9717\n";
-            comment += "⚡ Mode: ULTRA-FRESH (max 60 seconds)\n";
-            comment += "🔄 Polling: Every 500ms\n";
-            comment += "📁 Signal File: telegram_signals.txt\n";
-            comment += "════════════════════════════════════════════\n";
-
-            var now = DateTime.UtcNow;
-            var freshCount = allSignals.Count(s =>
-                s.Status.Contains("PROCESSED") &&
-                (now - s.DateTime).TotalSeconds <= 60
-            );
-
-            comment += "📊 LIVE STATISTICS:\n";
-            comment += "• Fresh Signals (< 60s): " + freshCount + "\n";
-            comment += "• Total Processed: " + allSignals.Count(s => s.Status.Contains("PROCESSED")) + "\n";
-            comment += "• Rejected Old: " + allSignals.Count(s => s.Status.Contains("Too old") || s.Status.Contains("REJECTED")) + "\n";
-            comment += "• Open Positions: " + openTradesCount + "\n";
-            comment += "• Monitoring Channels: " + selectedChannels.Count + "\n";
-            comment += "• Server Time: " + TimeToString(TimeCurrent(), TIME_DATE | TIME_MINUTES) + "\n";
-            comment += "════════════════════════════════════════════\n";
-
-            // Status
-            string systemStatus = "WAITING FOR FRESH SIGNALS 🟡";
-            if (freshCount > 0)
-                systemStatus = "PROCESSING FRESH SIGNALS ✅";
-            else if (totalExpiredSignals > 10)
-                systemStatus = "REJECTING OLD SIGNALS ⏰";
-
-            comment += "🎯 SYSTEM STATUS: " + systemStatus + "\n";
-            comment += "⚡ Only signals < 60 seconds old are processed\n";
-            comment += "🚀 Maximum speed mode activated!\n";
-
-            Comment(comment);
-        }
+      
 
         private void LvChannels_ItemChecked(object? sender, ItemCheckedEventArgs e)
         {

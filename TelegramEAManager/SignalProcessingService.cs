@@ -1148,35 +1148,37 @@ namespace TelegramEAManager
 
 
         // FIXED: Background cleanup
-        private void PerformCleanup(object? state)
+      private void PerformCleanup(object? state)
+{
+    try
+    {
+        // Clean old message hashes (older than 5 minutes)
+        var cutoffTime = DateTime.Now.AddMinutes(-5);
+        var keysToRemove = processedMessageHashes
+            .Where(kvp => kvp.Value < cutoffTime)
+            .Select(kvp => kvp.Key)
+            .ToList();
+
+        foreach (var key in keysToRemove)
         {
-            try
-            {
-                // Clean old message hashes (older than 5 minutes)
-                var cutoffTime = DateTime.Now.AddMinutes(-5);
-                var keysToRemove = processedMessageHashes
-                    .Where(kvp => kvp.Value < cutoffTime)
-                    .Select(kvp => kvp.Key)
-                    .ToList();
-
-                foreach (var key in keysToRemove)
-                {
-                    processedMessageHashes.TryRemove(key, out _);
-                }
-
-                if (keysToRemove.Count > 0)
-                {
-                    OnDebugMessage($"🧹 Cleaned {keysToRemove.Count} old message hashes");
-                }
-
-                lastCleanupTime = DateTime.Now;
-            }
-            catch (Exception ex)
-            {
-                OnErrorOccurred($"Cleanup error: {ex.Message}");
-            }
+            processedMessageHashes.TryRemove(key, out _);
         }
 
+        if (keysToRemove.Count > 0)
+        {
+            OnDebugMessage($"🧹 Cleaned {keysToRemove.Count} old message hashes");
+        }
+
+        // ADD THIS LINE to call the cleanup method
+        CleanupOldProcessedSignals();
+
+        lastCleanupTime = DateTime.Now;
+    }
+    catch (Exception ex)
+    {
+        OnErrorOccurred($"Cleanup error: {ex.Message}");
+    }
+}
 
         public async Task CleanupProcessedSignalsAsync()
         {
