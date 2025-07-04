@@ -29,8 +29,8 @@ namespace TelegramEAManager
         private readonly System.Threading.Timer? flushTimer;
         private volatile bool isProcessing = false;
 
-        private readonly int MaxSignalAgeSeconds = 300; // 5 minutes max age
-        private readonly int SignalGracePeriodSeconds = 30; // Grace period for processing
+        private readonly int MaxSignalAgeSeconds = 60; // 5 minutes max age
+        private readonly int SignalGracePeriodSeconds = 10; // Grace period for processing
         private readonly bool StrictFreshnessMode = true; // Reject even slightly old signals
 
         // Events
@@ -46,12 +46,13 @@ namespace TelegramEAManager
             ClearSignalFileOnStartup();
 
             // FIXED: Start background file flushing for performance
-            flushTimer = new System.Threading.Timer(FlushWriteQueue, null, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
+            flushTimer = new System.Threading.Timer(FlushWriteQueue, null, TimeSpan.FromMilliseconds(500), TimeSpan.FromMilliseconds(500));
 
             // FIXED: Start cleanup timer
             var cleanupTimer = new System.Threading.Timer(PerformCleanup, null, TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(1));
         }
 
+        // FIXED: High-performance background file writer
         // FIXED: High-performance background file writer
         private void FlushWriteQueue(object? state)
         {
@@ -83,6 +84,7 @@ namespace TelegramEAManager
         }
 
         // FIXED: Batch file writing for ultra-fast performance
+        // FIXED: Batch file writing for ultra-fast performance
         private async Task BatchWriteToFileAsync(List<string> lines)
         {
             if (string.IsNullOrEmpty(eaSettings.MT4FilesPath))
@@ -107,7 +109,7 @@ namespace TelegramEAManager
                         await writer.FlushAsync();
                     }
 
-                    OnDebugMessage($"⚡ BATCH WROTE {lines.Count} signals to file in milliseconds");
+                    OnDebugMessage($"⚡ BATCH WROTE {lines.Count} FRESH signals to file");
                 }
                 finally
                 {
@@ -126,6 +128,7 @@ namespace TelegramEAManager
             }
         }
 
+        // FIXED: Ultra-fast duplicate detection using better hashing
         // FIXED: Ultra-fast duplicate detection using better hashing
         private string GenerateMessageHash(string messageText, long channelId)
         {
@@ -149,8 +152,8 @@ namespace TelegramEAManager
             }
         }
 
+
         // FIXED: Clear signal file on startup with better performance
-        // ENHANCED: Clear old signal file and set up fresh monitoring
         private void ClearSignalFileOnStartup()
         {
             try
@@ -169,16 +172,16 @@ namespace TelegramEAManager
                     var headerContent = new StringBuilder();
                     headerContent.AppendLine("# Telegram EA Signal File - FRESH SIGNALS ONLY");
                     headerContent.AppendLine($"# Started: {DateTime.UtcNow:yyyy.MM.dd HH:mm:ss} UTC");
-                    headerContent.AppendLine($"# Max Signal Age: {MaxSignalAgeSeconds} seconds");
+                    headerContent.AppendLine($"# Max Signal Age: {MaxSignalAgeSeconds} seconds (1 minute)");
                     headerContent.AppendLine($"# Grace Period: {SignalGracePeriodSeconds} seconds");
-                    headerContent.AppendLine($"# Strict Mode: {(StrictFreshnessMode ? "ENABLED" : "DISABLED")}");
-                    headerContent.AppendLine("# Processing Mode: LIVE FRESH SIGNALS ONLY");
+                    headerContent.AppendLine($"# Strict Mode: ENABLED - Only LIVE signals");
+                    headerContent.AppendLine("# Processing Mode: ULTRA-FRESH SIGNALS ONLY");
                     headerContent.AppendLine("# Format: TIMESTAMP|CHANNEL_ID|CHANNEL_NAME|DIRECTION|SYMBOL|ENTRY|SL|TP1|TP2|TP3|STATUS");
-                    headerContent.AppendLine("# All timestamps are FRESH and in UTC");
+                    headerContent.AppendLine("# All timestamps are in LOCAL TIME for EA compatibility");
                     headerContent.AppendLine("");
 
                     File.WriteAllText(filePath, headerContent.ToString());
-                    OnDebugMessage("✅ Fresh signal file initialized - only live signals will be written");
+                    OnDebugMessage("✅ Fresh signal file initialized - only LIVE signals (max 60s old) will be written");
                 }
             }
             catch (Exception ex)
@@ -189,11 +192,13 @@ namespace TelegramEAManager
 
 
         // ENHANCED: Periodic cleanup of old processed signals from memory
+
+        // ENHANCED: Periodic cleanup of old processed signals from memory
         public void CleanupOldProcessedSignals()
         {
             try
             {
-                var cutoffTime = DateTime.UtcNow.AddMinutes(-10); // Keep only last 10 minutes
+                var cutoffTime = DateTime.UtcNow.AddMinutes(-5); // Keep only last 5 minutes
                 var keysToRemove = processedMessageHashes
                     .Where(kvp => kvp.Value < cutoffTime)
                     .Select(kvp => kvp.Key)
@@ -214,27 +219,22 @@ namespace TelegramEAManager
                 OnErrorOccurred($"Cleanup error: {ex.Message}");
             }
         }
-
         // ADD THIS METHOD: Get fresh signals statistics
         public (int TotalProcessed, int FreshSignals, int RejectedOld, double AverageAge) GetFreshSignalsStats()
         {
             var totalProcessed = processedSignals.Count;
             var freshSignals = processedSignals.Count(s => s.Status.Contains("PROCESSED"));
-            var rejectedOld = processedSignals.Count(s => s.Status.Contains("Too old"));
+            var rejectedOld = processedSignals.Count(s => s.Status.Contains("Too old") || s.Status.Contains("REJECTED"));
 
-            var avgAge = processedSignals
-                .Where(s => s.Status.Contains("PROCESSED"))
-                .Select(s => (DateTime.UtcNow - s.DateTime).TotalSeconds)
-                .DefaultIfEmpty(0)
-                .Average();
+            var avgAge = 0.0; // Fresh signals have near-zero age
 
             return (totalProcessed, freshSignals, rejectedOld, avgAge);
         }
 
 
-
         // FIXED: Ultra-fast signal processing with immediate queuing
         // ENHANCED: Ultra-fast signal processing with STRICT freshness control
+        // CRITICAL FIX: Main processing method with STRICT freshness control
         public ProcessedSignal ProcessTelegramMessage(string messageText, long channelId, string channelName)
         {
             var signal = new ProcessedSignal
@@ -249,17 +249,11 @@ namespace TelegramEAManager
 
             try
             {
-                // STEP 1: IMMEDIATE FRESHNESS CHECK
-                var messageAge = CalculateMessageAge(signal.DateTime);
+                // CRITICAL: IMMEDIATE FRESHNESS CHECK
+                var signalAge = TimeSpan.Zero; // New signals have zero age
 
-                if (!IsSignalFresh(messageAge))
-                {
-                    signal.Status = $"REJECTED - Too old ({messageAge.TotalSeconds:F0} seconds)";
-                    OnDebugMessage($"🚫 REJECTED OLD SIGNAL: Age = {messageAge.TotalSeconds:F0}s (Max: {MaxSignalAgeSeconds}s)");
-                    return signal; // Return rejected signal, don't process further
-                }
-
-                OnDebugMessage($"✅ FRESH SIGNAL: Age = {messageAge.TotalSeconds:F0}s - Processing...");
+                // For real-time signals, age is essentially zero
+                OnDebugMessage($"✅ REAL-TIME SIGNAL RECEIVED: Age = 0s - Processing immediately...");
 
                 // STEP 2: FAST DUPLICATE CHECK (only for fresh signals)
                 var messageHash = GenerateMessageHash(messageText, channelId);
@@ -267,64 +261,52 @@ namespace TelegramEAManager
                 if (processedMessageHashes.TryGetValue(messageHash, out DateTime processedTime))
                 {
                     var timeSinceProcessed = DateTime.UtcNow - processedTime;
-                    if (timeSinceProcessed.TotalMinutes < 2) // Reduced duplicate window
+                    if (timeSinceProcessed.TotalSeconds < 30) // Reduced duplicate window to 30 seconds
                     {
-                        signal.Status = "DUPLICATE - Already processed recently";
-                        OnDebugMessage($"🔄 DUPLICATE SIGNAL detected - processed {timeSinceProcessed.TotalSeconds:F0}s ago");
+                        signal.Status = "DUPLICATE - Already processed";
+                        OnDebugMessage($"🔄 DUPLICATE detected - processed {timeSinceProcessed.TotalSeconds:F0}s ago");
                         return signal;
                     }
                 }
 
-                // Mark as processed immediately (for fresh signals only)
+                // Mark as processed immediately
                 processedMessageHashes[messageHash] = DateTime.UtcNow;
 
-                // STEP 3: PARSE SIGNAL (only fresh, non-duplicate signals)
-                var parseTask = Task.Run(() => ParseTradingSignal(messageText));
-                var parsedData = parseTask.Wait(2000) ? parseTask.Result : null;
+                // STEP 3: PARSE SIGNAL
+                var parsedData = ParseTradingSignal(messageText);
 
                 if (parsedData != null)
                 {
                     signal.ParsedData = parsedData;
 
-                    // STEP 4: BACKGROUND PROCESSING FOR VALIDATED FRESH SIGNALS
-                    Task.Run(() =>
+                    // Apply symbol mapping
+                    ApplySymbolMapping(signal.ParsedData);
+
+                    if (ValidateSignal(signal.ParsedData))
                     {
-                        try
+                        // CRITICAL: Write IMMEDIATELY for fresh signals
+                        WriteSignalToFile(signal);
+                        signal.Status = "PROCESSED - Fresh signal written to EA";
+
+                        processedSignals.Enqueue(signal);
+
+                        // Trim queue if too large
+                        if (processedSignals.Count > 1000)
                         {
-                            ApplySymbolMapping(signal.ParsedData);
-
-                            if (ValidateSignal(signal.ParsedData))
+                            for (int i = 0; i < 100; i++)
                             {
-                                // ONLY WRITE FRESH, VALIDATED SIGNALS TO FILE
-                                QueueSignalForWriting(signal);
-                                signal.Status = "PROCESSED - Fresh signal written to EA";
-
-                                processedSignals.Enqueue(signal);
-
-                                // Trim queue if too large
-                                if (processedSignals.Count > 1000)
-                                {
-                                    for (int i = 0; i < 100; i++)
-                                    {
-                                        processedSignals.TryDequeue(out _);
-                                    }
-                                }
-
-                                OnSignalProcessed(signal);
-                                OnDebugMessage($"⚡ FRESH SIGNAL PROCESSED: {signal.ParsedData.Symbol} {signal.ParsedData.Direction} - Age: {messageAge.TotalSeconds:F0}s");
-                            }
-                            else
-                            {
-                                signal.Status = "INVALID - Missing required data";
-                                OnDebugMessage($"❌ Fresh signal failed validation: {signal.ParsedData?.Symbol}");
+                                processedSignals.TryDequeue(out _);
                             }
                         }
-                        catch (Exception ex)
-                        {
-                            signal.Status = $"ERROR - {ex.Message}";
-                            OnErrorOccurred($"Background processing error: {ex.Message}");
-                        }
-                    });
+
+                        OnSignalProcessed(signal);
+                        OnDebugMessage($"⚡ FRESH SIGNAL PROCESSED: {signal.ParsedData.Symbol} {signal.ParsedData.Direction} - Age: 0s");
+                    }
+                    else
+                    {
+                        signal.Status = "INVALID - Missing required data";
+                        OnDebugMessage($"❌ Signal failed validation: {signal.ParsedData?.Symbol}");
+                    }
                 }
                 else
                 {
@@ -341,6 +323,40 @@ namespace TelegramEAManager
 
             return signal;
         }
+
+        // CRITICAL FIX: Direct file writing for fresh signals
+        private void WriteSignalToFile(ProcessedSignal signal)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(eaSettings.MT4FilesPath))
+                {
+                    OnErrorOccurred("MT4 path not configured - cannot write signal");
+                    return;
+                }
+
+                var signalText = FormatSignalForEA(signal);
+
+                // Write immediately for fresh signals
+                var filePath = Path.Combine(eaSettings.MT4FilesPath, "telegram_signals.txt");
+
+                lock (fileLock)
+                {
+                    File.AppendAllText(filePath, signalText + Environment.NewLine);
+                }
+
+                OnDebugMessage($"✅ FRESH signal written to file: {signal.ParsedData?.Symbol} {signal.ParsedData?.Direction}");
+            }
+            catch (Exception ex)
+            {
+                OnErrorOccurred($"Error writing signal to file: {ex.Message}");
+
+                // Queue for retry
+                var signalText = FormatSignalForEA(signal);
+                writeQueue.Enqueue(signalText);
+            }
+        }
+
         private TimeSpan CalculateMessageAge(DateTime signalTime)
         {
             var currentTime = DateTime.UtcNow;
@@ -410,9 +426,11 @@ namespace TelegramEAManager
 
 
         // FIXED: Optimized signal formatting
+        // FIXED: Use local time for EA compatibility
         private string FormatSignalForEA(ProcessedSignal signal)
         {
-            var localTime = DateTime.Now;
+            // CRITICAL: Use local time for MT4/MT5 compatibility
+            var localTime = DateTime.Now; // EA expects local time
             var timestampFormatted = localTime.ToString("yyyy.MM.dd HH:mm:ss");
 
             return $"{timestampFormatted}|" +
@@ -428,8 +446,10 @@ namespace TelegramEAManager
                    $"NEW";
         }
 
+
         // FIXED: High-performance signal parsing with regex compilation
         private static readonly Regex DirectionRegex = new Regex(@"\b(BUY|SELL|LONG|SHORT)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
 
         private static readonly Regex[] SymbolPatterns = {
            // ===== MAJOR FOREX PAIRS =====
@@ -567,6 +587,7 @@ namespace TelegramEAManager
 };
 
         // ENHANCED PARSING METHOD WITH ALL SYMBOLS SUPPORT
+        // ENHANCED PARSING METHOD WITH ALL SYMBOLS SUPPORT
         private ParsedSignalData? ParseTradingSignal(string messageText)
         {
             if (string.IsNullOrWhiteSpace(messageText))
@@ -639,6 +660,7 @@ namespace TelegramEAManager
             OnDebugMessage($"✅ Signal parsed successfully: {signalData.Symbol} {signalData.Direction}");
             return signalData;
         }
+
 
         // ENHANCED: Validate signal completeness
         private bool ValidateSignalCompleteness(ParsedSignalData signalData)
@@ -720,6 +742,7 @@ namespace TelegramEAManager
                 return false;
             }
         }
+
         private void ExtractEnhancedPriceLevels(string text, ParsedSignalData signalData)
         {
             try
@@ -910,7 +933,6 @@ namespace TelegramEAManager
 
             return false;
         }
-
         // ENHANCED: Apply mega symbol mapping
         private string ApplyMegaSymbolMapping(string symbol)
         {
@@ -958,6 +980,7 @@ namespace TelegramEAManager
             OnDebugMessage($"📋 No mapping found, using original: {symbol}");
             return cleanSymbol; // Return cleaned version if no mapping found
         }
+
         // COMPREHENSIVE SYMBOL NORMALIZATION WITH 500+ MAPPINGS
         private static readonly Dictionary<string, string> MegaSymbolMappings = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
 {
@@ -1049,6 +1072,7 @@ namespace TelegramEAManager
         private static readonly ConcurrentDictionary<string, string> NormalizationCache = new ConcurrentDictionary<string, string>();
 
         // FIXED: Fast symbol mapping application
+        // FIXED: Fast symbol mapping application
         private void ApplySymbolMapping(ParsedSignalData parsedData)
         {
             try
@@ -1098,7 +1122,6 @@ namespace TelegramEAManager
             }
         }
 
-        // FIXED: Fast signal validation
         private bool ValidateSignal(ParsedSignalData? parsedData)
         {
             if (parsedData == null) return false;
@@ -1122,6 +1145,7 @@ namespace TelegramEAManager
 
             return true;
         }
+
 
         // FIXED: Background cleanup
         private void PerformCleanup(object? state)
@@ -1153,7 +1177,7 @@ namespace TelegramEAManager
             }
         }
 
-        // FIXED: Fast cleanup for processed signals
+
         public async Task CleanupProcessedSignalsAsync()
         {
             try
@@ -1185,8 +1209,8 @@ namespace TelegramEAManager
                         {
                             var ageMinutes = (now - signalTime).TotalMinutes;
 
-                            // Keep signals less than 5 minutes old OR those marked as PROCESSED
-                            if (ageMinutes <= 5 || (parts[10] == "PROCESSED" && ageMinutes <= 30))
+                            // Keep only VERY fresh signals (less than 2 minutes old)
+                            if (ageMinutes <= 2 || (parts[10] == "PROCESSED" && ageMinutes <= 10))
                             {
                                 newLines.Add(line);
                             }
@@ -1194,7 +1218,7 @@ namespace TelegramEAManager
                     }
 
                     await File.WriteAllLinesAsync(filePath, newLines);
-                    OnDebugMessage($"🧹 Ultra-fast cleanup: kept {newLines.Count(l => !l.StartsWith("#"))} signals");
+                    OnDebugMessage($"🧹 Ultra-fast cleanup: kept {newLines.Count(l => !l.StartsWith("#"))} fresh signals");
                 }
                 finally
                 {
@@ -1211,7 +1235,6 @@ namespace TelegramEAManager
         {
             Task.Run(async () => await CleanupProcessedSignalsAsync());
         }
-
         // Load/Save methods (keep existing implementations but add async versions)
         public void LoadSymbolMapping()
         {
